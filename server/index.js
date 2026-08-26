@@ -557,14 +557,14 @@ app.get(["/api/products", "/products"], async (req, res) => {
   const targetUrl = `${WOOCOMMERCE_URL}/wp-json/wc/v3/products?${params.toString()}`;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const timeout = setTimeout(() => controller.abort(), 20000);
 
   try {
     const upstreamRes = await fetch(targetUrl, {
       method: "GET",
       headers: {
         Accept: "application/json",
-        Authorization: getAuthHeader(),
+        "User-Agent": "PrimoArtGallery-App/1.0",
       },
       signal: controller.signal,
     });
@@ -613,14 +613,14 @@ app.get(["/api/products/:id", "/products/:id"], async (req, res) => {
   const targetUrl = `${WOOCOMMERCE_URL}/wp-json/wc/v3/products/${id}?${params.toString()}`;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const timeout = setTimeout(() => controller.abort(), 20000);
 
   try {
     const upstreamRes = await fetch(targetUrl, {
       method: "GET",
       headers: {
         Accept: "application/json",
-        Authorization: getAuthHeader(),
+        "User-Agent": "PrimoArtGallery-App/1.0",
       },
       signal: controller.signal,
     });
