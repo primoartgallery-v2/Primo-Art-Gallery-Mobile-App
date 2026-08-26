@@ -27,18 +27,29 @@ yarn-debug.*
 yarn-error.*
 
 # macOS
-.DS_Store
-*.pem
-
-# local env files
+# local env and secret files
 .env
 .env.*
 .env*.local
+*.env
+*.env.*
 server/.env
 server/.env.*
-*.env
 !.env.example
 !server/.env.example
+
+# Credentials & Service Accounts
+*.pem
+*.key
+*.cert
+*.crt
+*serviceAccount*.json
+serviceAccountKey.json
+google-services.json
+GoogleService-Info.plist
+server/data/
+src/constants/apiKeys.ts
+!src/constants/apiKeys.example.ts
 
 # typescript
 *.tsbuildinfo
