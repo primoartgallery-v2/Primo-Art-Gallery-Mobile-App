@@ -232,10 +232,154 @@ async function verifyGoogleIdToken(idToken) {
   throw new Error("Invalid or unverified Google credentials.");
 }
 
+/**
+ * Sets or updates a user's password securely in Firebase Authentication.
+ * In mock mode, uses memory-hard scrypt KDF with cryptographically random salt.
+ */
+async function setUserPassword(uid, password) {
+  if (!password || typeof password !== "string" || password.length < 8) {
+    throw new Error("Password must be at least 8 characters.");
+  }
+
+  const { auth, isMock } = initFirebaseAdmin();
+
+  if (!isMock && auth) {
+    try {
+      await auth.updateUser(uid, { password });
+      return { success: true };
+    } catch (err) {
+      console.warn("[FirebaseAdmin] Live updateUser password notice:", err.message);
+      throw err;
+    }
+  }
+
+  // Memory-hard scrypt KDF for mock/offline storage (Zero plaintexts)
+  const users = readMockUsers();
+  let userEmail = null;
+
+  for (const [email, user] of Object.entries(users)) {
+    if (user.uid === uid) {
+      userEmail = email;
+      break;
+    }
+  }
+
+  if (userEmail && users[userEmail]) {
+    const salt = crypto.randomBytes(32).toString("hex");
+    const derivedKey = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });
+    users[userEmail].scryptHash = derivedKey.toString("hex");
+    users[userEmail].scryptSalt = salt;
+    users[userEmail].passwordUpdatedAt = new Date().toISOString();
+    writeMockUsers(users);
+    return { success: true };
+  }
+
+  return { success: true };
+}
+
+/**
+ * Verifies email and password using official Firebase Identity Toolkit REST API
+ * where configured, or memory-hard scrypt constant-time comparison in mock engine.
+ */
+async function verifyPassword(email, password) {
+  if (!email || !password || typeof password !== "string" || password.length < 8) {
+    return { success: false, error: "Email and password (minimum 8 characters) are required." };
+  }
+
+  const cleanEmail = String(email).trim().toLowerCase();
+  const firebaseApiKey = process.env.FIREBASE_WEB_API_KEY || process.env.FIREBASE_API_KEY;
+
+  // Use official Firebase Identity Toolkit REST API when apiKey is provided
+  if (firebaseApiKey) {
+    try {
+      const response = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${firebaseApiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: cleanEmail,
+            password,
+            returnSecureToken: true,
+          }),
+        }
+      );
+
+      const data = await response.json();
+      if (response.ok && data.localId) {
+        return {
+          success: true,
+          uid: data.localId,
+          email: data.email || cleanEmail,
+          displayName: data.displayName || "",
+          photoURL: data.profilePicture || "",
+        };
+      }
+
+      const errorCode = data.error?.message;
+      if (errorCode === "EMAIL_NOT_FOUND") {
+        return { success: false, error: "No account found with this email. Please sign up." };
+      }
+      if (errorCode === "INVALID_PASSWORD" || errorCode === "INVALID_LOGIN_CREDENTIALS") {
+        return { success: false, error: "Incorrect password. Please try again." };
+      }
+      if (errorCode === "USER_DISABLED") {
+        return { success: false, error: "This account has been disabled." };
+      }
+
+      return { success: false, error: data.error?.message || "Invalid email or password." };
+    } catch (err) {
+      console.warn("[FirebaseAdmin] Firebase Identity Toolkit fetch notice:", err.message);
+    }
+  }
+
+  // Secure scrypt verification for mock/offline engine
+  const users = readMockUsers();
+  const user = users[cleanEmail];
+
+  if (!user) {
+    return { success: false, error: "No account found with this email. Please sign up." };
+  }
+
+  if (!user.scryptHash || !user.scryptSalt) {
+    return {
+      success: false,
+      error: "This account was created with OTP and has no password yet. Please sign in with OTP or reset password.",
+      isOtpOnlyUser: true,
+    };
+  }
+
+  try {
+    const derivedKey = crypto.scryptSync(password, user.scryptSalt, 64, { N: 16384, r: 8, p: 1 });
+    const match = crypto.timingSafeEqual(
+      Buffer.from(derivedKey.toString("hex"), "hex"),
+      Buffer.from(user.scryptHash, "hex")
+    );
+
+    if (!match) {
+      return { success: false, error: "Incorrect password. Please try again." };
+    }
+
+    return {
+      success: true,
+      uid: user.uid,
+      email: user.email,
+      displayName: user.displayName || "",
+      photoURL: user.photoURL || "",
+    };
+  } catch (err) {
+    console.error("[FirebaseAdmin] scrypt verification error:", err.message);
+    return { success: false, error: "Authentication verification failed." };
+  }
+}
+
 module.exports = {
   initFirebaseAdmin,
   getOrCreateUserByEmail,
   createCustomTokenForUser,
   verifyGoogleIdToken,
   generateDeterministicUid,
+  setUserPassword,
+  verifyPassword,
 };
+

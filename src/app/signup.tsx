@@ -23,10 +23,12 @@ import { useAppTheme } from "@/hooks/useAppTheme";
 export default function SignUpScreen() {
   const router = useRouter();
   const { colors } = useAppTheme();
-  const { sendOtp } = useAuth();
+  const { sendOtp, setPendingRegistration } = useAuth();
 
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [phone, setPhone] = useState("");
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -47,6 +49,12 @@ export default function SignUpScreen() {
       newErrors.email = "Email address is required";
     } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       newErrors.email = "Please enter a valid email address";
+    }
+
+    if (!password) {
+      newErrors.password = "Password is required";
+    } else if (password.length < 8) {
+      newErrors.password = "Password must be at least 8 characters";
     }
 
     if (phone.trim() && phone.replace(/[^\d]/g, "").length < 8) {
@@ -71,6 +79,7 @@ export default function SignUpScreen() {
     setTouched({
       fullName: true,
       email: true,
+      password: true,
       phone: true,
     });
 
@@ -82,14 +91,22 @@ export default function SignUpScreen() {
 
     try {
       const cleanEmail = email.trim().toLowerCase();
+
+      // Store sensitive registration payload strictly in RAM (AuthContext)
+      setPendingRegistration({
+        email: cleanEmail,
+        password,
+        fullName: fullName.trim(),
+        phone: phone.trim(),
+      });
+
       await sendOtp(cleanEmail);
 
+      // Navigate to /verify-otp with ONLY the email parameter (No password in navigation params)
       router.push({
         pathname: "/verify-otp" as any,
         params: {
           email: cleanEmail,
-          fullName: fullName.trim(),
-          phone: phone.trim(),
         },
       });
     } catch (err: any) {
@@ -205,6 +222,49 @@ export default function SignUpScreen() {
               </View>
               {touched.email && errors.email ? (
                 <Text style={styles.errorText}>{errors.email}</Text>
+              ) : null}
+            </View>
+
+            {/* PASSWORD */}
+            <View style={styles.fieldGroup}>
+              <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>CREATE PASSWORD</Text>
+              <View
+                style={[
+                  styles.inputContainer,
+                  { backgroundColor: colors.input, borderColor: colors.border },
+                  touched.password && errors.password && styles.inputError,
+                ]}
+              >
+                <Ionicons name="lock-closed-outline" size={19} color={colors.gold} style={styles.fieldIcon} />
+                <TextInput
+                  style={[styles.textInput, { color: colors.text, paddingRight: 40 }]}
+                  placeholder="Minimum 8 characters"
+                  placeholderTextColor={colors.textMuted}
+                  value={password}
+                  onChangeText={(val) => {
+                    setPassword(val);
+                    if (touched.password) validate();
+                  }}
+                  onBlur={() => handleBlur("password")}
+                  secureTextEntry={!showPassword}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <Pressable
+                  style={styles.eyeIconBtn}
+                  onPress={() => setShowPassword(!showPassword)}
+                  accessibilityRole="button"
+                  accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+                >
+                  <Ionicons
+                    name={showPassword ? "eye-off-outline" : "eye-outline"}
+                    size={20}
+                    color={colors.textSecondary}
+                  />
+                </Pressable>
+              </View>
+              {touched.password && errors.password ? (
+                <Text style={styles.errorText}>{errors.password}</Text>
               ) : null}
             </View>
 
@@ -378,6 +438,11 @@ const styles = StyleSheet.create({
     color: "#252525",
     fontSize: 14,
     fontFamily: FONTS.sansRegular,
+  },
+  eyeIconBtn: {
+    padding: 6,
+    justifyContent: "center",
+    alignItems: "center",
   },
   errorText: {
     color: "#C0392B",

@@ -96,18 +96,41 @@ export async function sendEmailOtp(
   }
 }
 
+export type VerifyOtpRegistrationOptions = {
+  password?: string;
+  fullName?: string;
+  phone?: string;
+};
+
 /**
  * Verifies the 6-digit OTP and authenticates with a Firebase Custom Token.
+ * Optionally completes registration if password / fullName / phone are provided.
  */
 export async function verifyEmailOtp(
   email: string,
-  otp: string
+  otp: string,
+  options?: VerifyOtpRegistrationOptions
 ): Promise<PrimoCollectorUser> {
   const cleanEmail = email.trim().toLowerCase();
   const cleanOtp = otp.trim();
 
   let user: PrimoCollectorUser;
   let customToken: string | null = null;
+
+  const payload: Record<string, any> = {
+    email: cleanEmail,
+    otp: cleanOtp,
+  };
+
+  if (options?.password && options.password.length >= 8) {
+    payload.password = options.password;
+  }
+  if (options?.fullName && options.fullName.trim()) {
+    payload.fullName = options.fullName.trim();
+  }
+  if (options?.phone && options.phone.trim()) {
+    payload.phone = options.phone.trim();
+  }
 
   try {
     const res = await fetch(`${API_BASE_URL}/api/auth/verify-otp`, {
@@ -116,7 +139,7 @@ export async function verifyEmailOtp(
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({ email: cleanEmail, otp: cleanOtp }),
+      body: JSON.stringify(payload),
     });
 
     const text = await res.text();
@@ -142,6 +165,167 @@ export async function verifyEmailOtp(
       throw err;
     }
 
+    if (err.message?.includes("Network request failed") || err.message?.includes("Failed to fetch")) {
+      throw new Error("Unable to connect to server. Please check your internet connection.");
+    }
+    throw err;
+  }
+
+  // Sign into client Firebase Auth if customToken was provided
+  if (customToken) {
+    try {
+      const auth = getFirebaseAuth();
+      const fbAuthModule = getFirebaseAuthModule();
+      if (auth && fbAuthModule?.signInWithCustomToken) {
+        await fbAuthModule.signInWithCustomToken(auth, customToken);
+      }
+    } catch (fbErr: any) {
+      console.warn("[AuthService] Client Firebase custom token sign-in notice:", fbErr?.message);
+    }
+  }
+
+  // Save active user session
+  await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+
+  // Run non-destructive legacy data migration
+  await checkAndMigrateLegacyData(user.id, user.email);
+
+  return user;
+}
+
+/**
+ * Authenticates with Email + Password (instant login).
+ */
+export async function loginWithEmailPassword(
+  email: string,
+  password: string
+): Promise<PrimoCollectorUser> {
+  const cleanEmail = email.trim().toLowerCase();
+
+  if (!cleanEmail) {
+    throw new Error("Please enter your email address.");
+  }
+  if (!password || password.length < 8) {
+    throw new Error("Password must be at least 8 characters.");
+  }
+
+  let user: PrimoCollectorUser;
+  let customToken: string | null = null;
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/auth/login-password`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ email: cleanEmail, password }),
+    });
+
+    const text = await res.text();
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error("Authentication response error. Please try again.");
+    }
+
+    if (!res.ok) {
+      const error = new Error(data.error || "Authentication failed.");
+      (error as any).isOtpOnlyUser = data.isOtpOnlyUser;
+      throw error;
+    }
+
+    user = data.user;
+    customToken = data.customToken;
+  } catch (err: any) {
+    if (err.isOtpOnlyUser) {
+      throw err;
+    }
+    if (err.message?.includes("Network request failed") || err.message?.includes("Failed to fetch")) {
+      throw new Error("Unable to connect to server. Please check your internet connection.");
+    }
+    throw err;
+  }
+
+  // Sign into client Firebase Auth if customToken was provided
+  if (customToken) {
+    try {
+      const auth = getFirebaseAuth();
+      const fbAuthModule = getFirebaseAuthModule();
+      if (auth && fbAuthModule?.signInWithCustomToken) {
+        await fbAuthModule.signInWithCustomToken(auth, customToken);
+      }
+    } catch (fbErr: any) {
+      console.warn("[AuthService] Client Firebase custom token sign-in notice:", fbErr?.message);
+    }
+  }
+
+  // Save active user session
+  await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+
+  // Run non-destructive legacy data migration
+  await checkAndMigrateLegacyData(user.id, user.email);
+
+  return user;
+}
+
+/**
+ * Resets user password using 6-digit OTP and authenticates immediately.
+ */
+export async function resetPasswordWithOtp(
+  email: string,
+  otp: string,
+  newPassword: string
+): Promise<PrimoCollectorUser> {
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanOtp = otp.trim();
+
+  if (!cleanEmail) {
+    throw new Error("Please enter your email address.");
+  }
+  if (!/^\d{6}$/.test(cleanOtp)) {
+    throw new Error("Verification code must be exactly 6 digits.");
+  }
+  if (!newPassword || newPassword.length < 8) {
+    throw new Error("New password must be at least 8 characters.");
+  }
+
+  let user: PrimoCollectorUser;
+  let customToken: string | null = null;
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/auth/reset-password`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ email: cleanEmail, otp: cleanOtp, newPassword }),
+    });
+
+    const text = await res.text();
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error("Password reset response error. Please try again.");
+    }
+
+    if (!res.ok) {
+      const error = new Error(data.error || "Failed to reset password.");
+      (error as any).locked = data.locked;
+      (error as any).remainingAttempts = data.remainingAttempts;
+      (error as any).remainingMinutes = data.remainingMinutes;
+      throw error;
+    }
+
+    user = data.user;
+    customToken = data.customToken;
+  } catch (err: any) {
+    if (err.locked || err.remainingAttempts !== undefined) {
+      throw err;
+    }
     if (err.message?.includes("Network request failed") || err.message?.includes("Failed to fetch")) {
       throw new Error("Unable to connect to server. Please check your internet connection.");
     }

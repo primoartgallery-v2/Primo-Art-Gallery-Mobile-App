@@ -215,12 +215,98 @@ app.post(["/api/auth/verify-otp", "/api/api/auth/verify-otp", "/auth/verify-otp"
     // OTP is valid! Immediately invalidate it (single-use guarantee)
     await persistentAuthStore.invalidateOtpSession(email);
 
+    // Optional registration payload (password, fullName, phone)
+    const rawPassword = req.body?.password;
+    const rawFullName = req.body?.fullName;
+    const rawPhone = req.body?.phone;
+
+    const extraData = {};
+    if (rawFullName && typeof rawFullName === "string" && rawFullName.trim()) {
+      extraData.displayName = rawFullName.trim();
+    }
+
     // Resolve or create canonical user via Firebase Admin Identity Authority
-    const user = await firebaseAdmin.getOrCreateUserByEmail(email);
+    const user = await firebaseAdmin.getOrCreateUserByEmail(email, extraData);
+
+    // If password provided during registration, set it securely in Firebase Auth (scrypt)
+    if (rawPassword && typeof rawPassword === "string" && rawPassword.length >= 8) {
+      try {
+        await firebaseAdmin.setUserPassword(user.uid, rawPassword);
+      } catch (pwErr) {
+        console.warn("[Auth API] Set initial password notice:", pwErr.message);
+      }
+    }
 
     // Mint Firebase Custom Token
     const customToken = await firebaseAdmin.createCustomTokenForUser(user.uid, {
       authMethod: "email_otp",
+    });
+
+    const collectorProfile = {
+      id: user.uid,
+      email: user.email,
+      first_name: user.displayName ? user.displayName.split(" ")[0] : "Collector",
+      last_name: user.displayName && user.displayName.split(" ").length > 1
+        ? user.displayName.split(" ").slice(1).join(" ")
+        : "",
+      username: user.email.split("@")[0].replace(/[^a-z0-9_]/gi, ""),
+      role: "customer",
+      billing: {
+        email: user.email,
+        first_name: user.displayName ? user.displayName.split(" ")[0] : "Collector",
+        phone: typeof rawPhone === "string" ? rawPhone.trim() : "",
+      },
+      avatar_url: user.photoURL || "avatar_1",
+      date_created: user.createdAt,
+    };
+
+    return res.json({
+      success: true,
+      customToken,
+      user: collectorProfile,
+    });
+  } catch (err) {
+    console.error("[Auth API] verify-otp error:", err.message);
+    return res.status(500).json({ error: "Failed to verify code. Please try again." });
+  }
+});
+
+/**
+ * POST /api/auth/login-password
+ * Authenticates user via Firebase Authentication email + password flow.
+ * On success, mints a Firebase Custom Token and returns canonical collector profile.
+ */
+app.post(["/api/auth/login-password", "/api/api/auth/login-password", "/auth/login-password"], async (req, res) => {
+  try {
+    const rawEmail = req.body?.email;
+    const rawPassword = req.body?.password;
+
+    if (!rawEmail || !rawPassword) {
+      return res.status(400).json({ error: "Email and password are required." });
+    }
+
+    const email = String(rawEmail).trim().toLowerCase();
+    const password = String(rawPassword);
+
+    if (password.length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters." });
+    }
+
+    const verifyResult = await firebaseAdmin.verifyPassword(email, password);
+
+    if (!verifyResult.success) {
+      return res.status(401).json({
+        error: verifyResult.error || "Invalid email or password.",
+        isOtpOnlyUser: verifyResult.isOtpOnlyUser || false,
+      });
+    }
+
+    // User authenticated successfully! Fetch/ensure user profile
+    const user = await firebaseAdmin.getOrCreateUserByEmail(email);
+
+    // Mint Firebase Custom Token
+    const customToken = await firebaseAdmin.createCustomTokenForUser(user.uid, {
+      authMethod: "email_password",
     });
 
     const collectorProfile = {
@@ -246,8 +332,118 @@ app.post(["/api/auth/verify-otp", "/api/api/auth/verify-otp", "/auth/verify-otp"
       user: collectorProfile,
     });
   } catch (err) {
-    console.error("[Auth API] verify-otp error:", err.message);
-    return res.status(500).json({ error: "Failed to verify code. Please try again." });
+    console.error("[Auth API] login-password error:", err.message);
+    return res.status(500).json({ error: "Authentication failed. Please try again." });
+  }
+});
+
+/**
+ * POST /api/auth/reset-password
+ * Verifies 6-digit OTP and updates user's password in Firebase Authentication.
+ */
+app.post(["/api/auth/reset-password", "/api/api/auth/reset-password", "/auth/reset-password"], async (req, res) => {
+  try {
+    const rawEmail = req.body?.email;
+    const rawOtp = req.body?.otp;
+    const rawNewPassword = req.body?.newPassword;
+
+    if (!rawEmail || !rawOtp || !rawNewPassword) {
+      return res.status(400).json({ error: "Email, verification code, and new password are required." });
+    }
+
+    const email = String(rawEmail).trim().toLowerCase();
+    const otp = String(rawOtp).trim();
+    const newPassword = String(rawNewPassword);
+
+    if (!/^\d{6}$/.test(otp)) {
+      return res.status(400).json({ error: "Verification code must be exactly 6 digits." });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: "New password must be at least 8 characters." });
+    }
+
+    const session = await persistentAuthStore.getOtpSession(email);
+    if (!session || session.consumed) {
+      return res.status(400).json({
+        error: "No active verification code found. Please request a new code.",
+      });
+    }
+
+    const now = Date.now();
+    if (session.lockedUntil && now < session.lockedUntil) {
+      const remainingLockMinutes = Math.ceil((session.lockedUntil - now) / (60 * 1000));
+      return res.status(423).json({
+        error: `Verification is temporarily locked due to too many failed attempts. Please try again in ${remainingLockMinutes} minutes.`,
+        locked: true,
+        remainingMinutes: remainingLockMinutes,
+      });
+    }
+
+    if (now > session.expiresAt) {
+      await persistentAuthStore.invalidateOtpSession(email);
+      return res.status(400).json({
+        error: "This verification code has expired. Please request a new code.",
+        expired: true,
+      });
+    }
+
+    const isValid = persistentAuthStore.verifyOtpHash(otp, session.otpHash, session.salt);
+    if (!isValid) {
+      const attemptResult = await persistentAuthStore.recordFailedAttempt(email);
+      if (attemptResult.locked) {
+        return res.status(423).json({
+          error: "Incorrect code. Maximum attempts exceeded. Verification is locked for 30 minutes.",
+          locked: true,
+          remainingMinutes: 30,
+        });
+      }
+      return res.status(400).json({
+        error: `Incorrect code. ${attemptResult.remainingAttempts} attempt(s) remaining.`,
+        remainingAttempts: attemptResult.remainingAttempts,
+      });
+    }
+
+    // Invalidate OTP immediately
+    await persistentAuthStore.invalidateOtpSession(email);
+
+    // Get or create canonical user
+    const user = await firebaseAdmin.getOrCreateUserByEmail(email);
+
+    // Set new password securely in Firebase Auth
+    await firebaseAdmin.setUserPassword(user.uid, newPassword);
+
+    // Mint Firebase Custom Token
+    const customToken = await firebaseAdmin.createCustomTokenForUser(user.uid, {
+      authMethod: "password_reset",
+    });
+
+    const collectorProfile = {
+      id: user.uid,
+      email: user.email,
+      first_name: user.displayName ? user.displayName.split(" ")[0] : "Collector",
+      last_name: user.displayName && user.displayName.split(" ").length > 1
+        ? user.displayName.split(" ").slice(1).join(" ")
+        : "",
+      username: user.email.split("@")[0].replace(/[^a-z0-9_]/gi, ""),
+      role: "customer",
+      billing: {
+        email: user.email,
+        first_name: user.displayName ? user.displayName.split(" ")[0] : "Collector",
+      },
+      avatar_url: user.photoURL || "avatar_1",
+      date_created: user.createdAt,
+    };
+
+    return res.json({
+      success: true,
+      message: "Password reset successfully.",
+      customToken,
+      user: collectorProfile,
+    });
+  } catch (err) {
+    console.error("[Auth API] reset-password error:", err.message);
+    return res.status(500).json({ error: "Failed to reset password. Please try again." });
   }
 });
 

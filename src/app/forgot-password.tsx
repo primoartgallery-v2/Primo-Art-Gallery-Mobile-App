@@ -23,13 +23,19 @@ import { useAppTheme } from "@/hooks/useAppTheme";
 export default function ForgotPasswordScreen() {
   const router = useRouter();
   const { colors } = useAppTheme();
-  const { sendOtp } = useAuth();
+  const { sendOtp, resetPassword } = useAuth();
 
+  const [step, setStep] = useState<1 | 2>(1);
   const [email, setEmail] = useState("");
+  const [otp, setOtp] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const handleSendOtp = async () => {
+  const handleSendResetCode = async () => {
     try {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch {}
@@ -45,15 +51,62 @@ export default function ForgotPasswordScreen() {
 
     try {
       await sendOtp(cleanEmail);
-      router.push({
-        pathname: "/verify-otp" as any,
-        params: { email: cleanEmail },
-      });
+      setStep(2);
+      try {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } catch {}
     } catch (err: any) {
       setErrorMessage(
         err instanceof Error
           ? err.message
-          : "Unable to process verification. Please try again."
+          : "Unable to send reset code. Please try again."
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleResetPassword = async () => {
+    try {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } catch {}
+    setErrorMessage(null);
+
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanOtp = otp.trim();
+
+    if (!/^\d{6}$/.test(cleanOtp)) {
+      setErrorMessage("Please enter the 6-digit verification code sent to your email.");
+      return;
+    }
+
+    if (!newPassword || newPassword.length < 8) {
+      setErrorMessage("New password must be at least 8 characters.");
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setErrorMessage("Passwords do not match.");
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      await resetPassword(cleanEmail, cleanOtp, newPassword);
+      setSuccessMessage("Password reset successfully! Redirecting...");
+      try {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } catch {}
+
+      setTimeout(() => {
+        router.replace("/" as any);
+      }, 1000);
+    } catch (err: any) {
+      setErrorMessage(
+        err instanceof Error
+          ? err.message
+          : "Failed to reset password. Please check your verification code."
       );
     } finally {
       setIsSubmitting(false);
@@ -78,24 +131,38 @@ export default function ForgotPasswordScreen() {
               styles.backButton,
               { backgroundColor: colors.card, borderColor: colors.border },
             ]}
-            onPress={() => router.back()}
+            onPress={() => {
+              if (step === 2) {
+                setStep(1);
+                setErrorMessage(null);
+              } else {
+                router.back();
+              }
+            }}
             accessibilityLabel="Go back"
           >
             <Ionicons name="arrow-back" size={22} color={colors.text} />
           </Pressable>
-          <Text style={[styles.headerTitle, { color: colors.text }]}>Sign In via OTP</Text>
+          <Text style={[styles.headerTitle, { color: colors.text }]}>
+            {step === 1 ? "Forgot Password" : "Reset Password"}
+          </Text>
           <View style={styles.headerSpacer} />
         </View>
 
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
         >
           <View style={styles.brandHero}>
-            <Text style={[styles.eyebrow, { color: colors.gold }]}>PASSWORDLESS SECURITY</Text>
-            <Text style={[styles.heroTitle, { color: colors.text }]}>Instant Access</Text>
+            <Text style={[styles.eyebrow, { color: colors.gold }]}>SECURITY & RECOVERY</Text>
+            <Text style={[styles.heroTitle, { color: colors.text }]}>
+              {step === 1 ? "Recover Access" : "Set New Password"}
+            </Text>
             <Text style={[styles.heroSubtitle, { color: colors.textSecondary }]}>
-              Primo Art Gallery now uses secure, passwordless Email OTP. You never have to remember or reset a password.
+              {step === 1
+                ? "Enter your collector email address to receive a secure 6-digit reset code."
+                : `Enter the 6-digit code sent to ${email} and choose your new password.`}
             </Text>
           </View>
 
@@ -107,46 +174,171 @@ export default function ForgotPasswordScreen() {
               </View>
             ) : null}
 
-            <View style={styles.fieldGroup}>
-              <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>EMAIL ADDRESS</Text>
-              <View
-                style={[
-                  styles.inputContainer,
-                  { backgroundColor: colors.input, borderColor: colors.border },
-                ]}
-              >
-                <Ionicons name="mail-outline" size={19} color={colors.gold} style={styles.fieldIcon} />
-                <TextInput
-                  style={[styles.textInput, { color: colors.text }]}
-                  placeholder="e.g. yourmail@example.com"
-                  placeholderTextColor={colors.textMuted}
-                  value={email}
-                  onChangeText={setEmail}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                />
+            {successMessage ? (
+              <View style={[styles.errorBanner, { backgroundColor: "#F0FDF4", borderColor: "#BBF7D0" }]}>
+                <Ionicons name="checkmark-circle" size={18} color="#16A34A" />
+                <Text style={[styles.errorBannerText, { color: "#16A34A" }]}>{successMessage}</Text>
               </View>
-            </View>
+            ) : null}
 
-            <Pressable
-              style={({ pressed }) => [
-                styles.submitButton,
-                { backgroundColor: colors.gold },
-                pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] },
-                isSubmitting && styles.submitButtonDisabled,
-              ]}
-              onPress={handleSendOtp}
-              disabled={isSubmitting}
-            >
-              {isSubmitting ? (
-                <ActivityIndicator color="#FFFFFF" size="small" />
-              ) : (
-                <>
-                  <Text style={styles.submitButtonText}>SEND VERIFICATION CODE</Text>
-                  <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
-                </>
-              )}
-            </Pressable>
+            {step === 1 ? (
+              /* STEP 1: EMAIL */
+              <>
+                <View style={styles.fieldGroup}>
+                  <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>EMAIL ADDRESS</Text>
+                  <View
+                    style={[
+                      styles.inputContainer,
+                      { backgroundColor: colors.input, borderColor: colors.border },
+                    ]}
+                  >
+                    <Ionicons name="mail-outline" size={19} color={colors.gold} style={styles.fieldIcon} />
+                    <TextInput
+                      style={[styles.textInput, { color: colors.text }]}
+                      placeholder="e.g. yourmail@example.com"
+                      placeholderTextColor={colors.textMuted}
+                      value={email}
+                      onChangeText={setEmail}
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      onSubmitEditing={handleSendResetCode}
+                      returnKeyType="go"
+                    />
+                  </View>
+                </View>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.submitButton,
+                    { backgroundColor: colors.gold },
+                    pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] },
+                    isSubmitting && styles.submitButtonDisabled,
+                  ]}
+                  onPress={handleSendResetCode}
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <ActivityIndicator color="#FFFFFF" size="small" />
+                  ) : (
+                    <>
+                      <Text style={styles.submitButtonText}>SEND RESET CODE</Text>
+                      <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
+                    </>
+                  )}
+                </Pressable>
+              </>
+            ) : (
+              /* STEP 2: OTP + NEW PASSWORD */
+              <>
+                <View style={styles.fieldGroup}>
+                  <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>6-DIGIT VERIFICATION CODE</Text>
+                  <View
+                    style={[
+                      styles.inputContainer,
+                      { backgroundColor: colors.input, borderColor: colors.border },
+                    ]}
+                  >
+                    <Ionicons name="shield-checkmark-outline" size={19} color={colors.gold} style={styles.fieldIcon} />
+                    <TextInput
+                      style={[styles.textInput, { color: colors.text, letterSpacing: 4, fontFamily: FONTS.sansBold }]}
+                      placeholder="123456"
+                      placeholderTextColor={colors.textMuted}
+                      value={otp}
+                      onChangeText={(val) => setOtp(val.replace(/[^0-9]/g, "").slice(0, 6))}
+                      keyboardType="number-pad"
+                      maxLength={6}
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.fieldGroup}>
+                  <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>NEW PASSWORD</Text>
+                  <View
+                    style={[
+                      styles.inputContainer,
+                      { backgroundColor: colors.input, borderColor: colors.border },
+                    ]}
+                  >
+                    <Ionicons name="lock-closed-outline" size={19} color={colors.gold} style={styles.fieldIcon} />
+                    <TextInput
+                      style={[styles.textInput, { color: colors.text, paddingRight: 40 }]}
+                      placeholder="Minimum 8 characters"
+                      placeholderTextColor={colors.textMuted}
+                      value={newPassword}
+                      onChangeText={setNewPassword}
+                      secureTextEntry={!showPassword}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                    />
+                    <Pressable
+                      style={styles.eyeIconBtn}
+                      onPress={() => setShowPassword(!showPassword)}
+                    >
+                      <Ionicons
+                        name={showPassword ? "eye-off-outline" : "eye-outline"}
+                        size={20}
+                        color={colors.textSecondary}
+                      />
+                    </Pressable>
+                  </View>
+                </View>
+
+                <View style={styles.fieldGroup}>
+                  <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>CONFIRM NEW PASSWORD</Text>
+                  <View
+                    style={[
+                      styles.inputContainer,
+                      { backgroundColor: colors.input, borderColor: colors.border },
+                    ]}
+                  >
+                    <Ionicons name="lock-closed-outline" size={19} color={colors.gold} style={styles.fieldIcon} />
+                    <TextInput
+                      style={[styles.textInput, { color: colors.text, paddingRight: 40 }]}
+                      placeholder="Re-enter new password"
+                      placeholderTextColor={colors.textMuted}
+                      value={confirmPassword}
+                      onChangeText={setConfirmPassword}
+                      secureTextEntry={!showPassword}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      onSubmitEditing={handleResetPassword}
+                      returnKeyType="done"
+                    />
+                  </View>
+                </View>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.submitButton,
+                    { backgroundColor: colors.gold },
+                    pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] },
+                    isSubmitting && styles.submitButtonDisabled,
+                  ]}
+                  onPress={handleResetPassword}
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <ActivityIndicator color="#FFFFFF" size="small" />
+                  ) : (
+                    <>
+                      <Text style={styles.submitButtonText}>RESET PASSWORD & SIGN IN</Text>
+                      <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
+                    </>
+                  )}
+                </Pressable>
+
+                <Pressable
+                  style={styles.resendBtn}
+                  onPress={handleSendResetCode}
+                  disabled={isSubmitting}
+                >
+                  <Text style={[styles.resendBtnText, { color: colors.gold }]}>
+                    Didn't receive code? Resend Code
+                  </Text>
+                </Pressable>
+              </>
+            )}
 
             <View style={styles.switchAuthRow}>
               <Text style={[styles.switchAuthPrompt, { color: colors.textSecondary }]}>Return to</Text>
@@ -267,6 +459,21 @@ const styles = StyleSheet.create({
     color: "#252525",
     fontSize: 14,
     fontFamily: FONTS.sansRegular,
+  },
+  eyeIconBtn: {
+    padding: 6,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  resendBtn: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 10,
+    marginTop: 4,
+  },
+  resendBtnText: {
+    fontSize: 12,
+    fontFamily: FONTS.sansSemiBold,
   },
   submitButton: {
     height: 52,

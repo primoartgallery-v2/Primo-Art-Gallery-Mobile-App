@@ -679,7 +679,7 @@ const styles = StyleSheet.create({
   },
   welcomeGreeting: {
     fontSize: 16,
-    fontFamily: FONTS.serifMedium,
+    fontFamily: FONTS.serifSemiBold,
     textAlign: "center",
     marginBottom: 12,
   },

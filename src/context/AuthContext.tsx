@@ -3,11 +3,14 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import {
   getStoredUser,
+  loginWithEmailPassword,
   logoutUser,
+  resetPasswordWithOtp,
   sendEmailOtp,
   signInWithGoogle,
   updateStoredUserProfile,
@@ -18,11 +21,22 @@ import {
 } from "@/services/auth";
 import { getFirebaseAuth, getFirebaseAuthModule } from "@/services/firebase";
 
+export type PendingRegistrationData = {
+  email: string;
+  password?: string;
+  fullName?: string;
+  phone?: string;
+};
+
 type AuthContextType = {
   user: PrimoCollectorUser | null;
   isLoading: boolean;
   sendOtp: (email: string) => Promise<{ success: boolean; message: string; expiresInSeconds: number }>;
   verifyOtp: (email: string, otp: string) => Promise<PrimoCollectorUser>;
+  loginWithPassword: (email: string, password: string) => Promise<PrimoCollectorUser>;
+  resetPassword: (email: string, otp: string, newPassword: string) => Promise<PrimoCollectorUser>;
+  setPendingRegistration: (data: PendingRegistrationData | null) => void;
+  getPendingRegistrationEmail: () => string | null;
   loginWithGoogle: (idToken: string) => Promise<PrimoCollectorUser>;
   logout: () => Promise<void>;
   updateProfile: (params: UpdateProfileParams) => Promise<PrimoCollectorUser>;
@@ -39,6 +53,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<PrimoCollectorUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const pendingRegistrationRef = useRef<PendingRegistrationData | null>(null);
 
   const loadSession = useCallback(async () => {
     setIsLoading(true);
@@ -78,6 +93,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [loadSession]);
 
+  const setPendingRegistration = useCallback((data: PendingRegistrationData | null) => {
+    pendingRegistrationRef.current = data;
+  }, []);
+
+  const getPendingRegistrationEmail = useCallback(() => {
+    return pendingRegistrationRef.current?.email || null;
+  }, []);
+
   const sendOtp = async (email: string) => {
     return sendEmailOtp(email);
   };
@@ -85,7 +108,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const verifyOtp = async (email: string, otp: string) => {
     setIsLoading(true);
     try {
-      const loggedUser = await verifyEmailOtp(email, otp);
+      const cleanEmail = email.trim().toLowerCase();
+      let registrationOptions: { password?: string; fullName?: string; phone?: string } | undefined;
+
+      if (
+        pendingRegistrationRef.current &&
+        pendingRegistrationRef.current.email.trim().toLowerCase() === cleanEmail
+      ) {
+        registrationOptions = {
+          password: pendingRegistrationRef.current.password,
+          fullName: pendingRegistrationRef.current.fullName,
+          phone: pendingRegistrationRef.current.phone,
+        };
+        // Wipe sensitive in-memory registration data immediately upon consumption
+        pendingRegistrationRef.current = null;
+      }
+
+      const loggedUser = await verifyEmailOtp(cleanEmail, otp, registrationOptions);
+      setUser(loggedUser);
+      return loggedUser;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const loginWithPassword = async (email: string, password: string) => {
+    setIsLoading(true);
+    try {
+      const loggedUser = await loginWithEmailPassword(email, password);
+      setUser(loggedUser);
+      return loggedUser;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const resetPassword = async (email: string, otp: string, newPassword: string) => {
+    setIsLoading(true);
+    try {
+      const loggedUser = await resetPasswordWithOtp(email, otp, newPassword);
       setUser(loggedUser);
       return loggedUser;
     } finally {
@@ -107,6 +168,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = async () => {
     setIsLoading(true);
     try {
+      pendingRegistrationRef.current = null;
       await logoutUser();
       setUser(null);
     } finally {
@@ -131,7 +193,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Backward-compatible stubs
   const login = async (identifier: string, pass: string) => {
-    return verifyOtp(identifier, pass);
+    return loginWithPassword(identifier, pass);
   };
 
   const signup = async (params: RegisterCustomerParams) => {
@@ -160,6 +222,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isLoading,
         sendOtp,
         verifyOtp,
+        loginWithPassword,
+        resetPassword,
+        setPendingRegistration,
+        getPendingRegistrationEmail,
         loginWithGoogle,
         logout,
         updateProfile,

@@ -25,12 +25,67 @@ import { useAppTheme } from "@/hooks/useAppTheme";
 export default function LoginScreen() {
   const router = useRouter();
   const { colors } = useAppTheme();
-  const { sendOtp, loginWithGoogle } = useAuth();
+  const { sendOtp, loginWithPassword, loginWithGoogle } = useAuth();
 
+  const [authMode, setAuthMode] = useState<"password" | "otp">("password");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const handlePasswordLogin = async () => {
+    try {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } catch {}
+    setErrorMessage(null);
+
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
+      setErrorMessage("Please enter your email address.");
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setErrorMessage("Please enter a valid email address.");
+      return;
+    }
+    if (!password) {
+      setErrorMessage("Please enter your password.");
+      return;
+    }
+    if (password.length < 8) {
+      setErrorMessage("Password must be at least 8 characters.");
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      await loginWithPassword(cleanEmail, password);
+      try {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } catch {}
+      router.replace("/" as any);
+    } catch (err: any) {
+      try {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      } catch {}
+
+      if (err.isOtpOnlyUser) {
+        setErrorMessage("This account was created with OTP. You can sign in with OTP below or reset your password.");
+        setAuthMode("otp");
+      } else {
+        setErrorMessage(
+          err instanceof Error
+            ? err.message
+            : "Invalid email or password. Please try again."
+        );
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const handleSendOtp = async () => {
     try {
@@ -76,14 +131,11 @@ export default function LoginScreen() {
     setIsGoogleSubmitting(true);
 
     try {
-      // In production with @react-native-google-signin or Google OAuth:
-      // const { idToken } = await GoogleSignin.signIn();
-      // await loginWithGoogle(idToken);
       Alert.alert(
         "Google Authentication",
-        "Google authentication is active. To authenticate directly via your Google account, select your preferred Google email or proceed with instant Email OTP.",
+        "Google authentication is active. To authenticate directly via your Google account, select your preferred Google email or proceed with instant Email OTP / Password.",
         [
-          { text: "Use Email OTP", onPress: () => {} },
+          { text: "Use Email OTP", onPress: () => setAuthMode("otp") },
           { text: "Cancel", style: "cancel" },
         ]
       );
@@ -141,7 +193,9 @@ export default function LoginScreen() {
             <Text style={[styles.eyebrow, { color: colors.gold }]}>PRIMO ART GALLERY</Text>
             <Text style={[styles.heroTitle, { color: colors.text }]}>Welcome Back</Text>
             <Text style={[styles.heroSubtitle, { color: colors.textSecondary }]}>
-              Enter your email to receive a secure one-time verification code and access your private collection.
+              {authMode === "password"
+                ? "Sign in with your email and password for immediate collector access."
+                : "Enter your email to receive a secure one-time verification code."}
             </Text>
           </View>
 
@@ -175,13 +229,61 @@ export default function LoginScreen() {
                   keyboardType="email-address"
                   autoCapitalize="none"
                   autoCorrect={false}
-                  onSubmitEditing={handleSendOtp}
+                  onSubmitEditing={authMode === "password" ? handlePasswordLogin : handleSendOtp}
                   returnKeyType="go"
                 />
               </View>
             </View>
 
-            {/* SEND OTP BUTTON */}
+            {/* PASSWORD INPUT (IF PASSWORD MODE) */}
+            {authMode === "password" ? (
+              <View style={styles.fieldGroup}>
+                <View style={styles.passwordHeaderRow}>
+                  <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
+                    PASSWORD
+                  </Text>
+                  <Pressable onPress={() => router.push("/forgot-password" as any)}>
+                    <Text style={[styles.forgotPasswordLink, { color: colors.gold }]}>
+                      Forgot Password?
+                    </Text>
+                  </Pressable>
+                </View>
+                <View
+                  style={[
+                    styles.inputContainer,
+                    { backgroundColor: colors.input, borderColor: colors.border },
+                  ]}
+                >
+                  <Ionicons name="lock-closed-outline" size={19} color={colors.gold} style={styles.fieldIcon} />
+                  <TextInput
+                    style={[styles.textInput, { color: colors.text, paddingRight: 40 }]}
+                    placeholder="Enter your password"
+                    placeholderTextColor={colors.textMuted}
+                    value={password}
+                    onChangeText={setPassword}
+                    secureTextEntry={!showPassword}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    onSubmitEditing={handlePasswordLogin}
+                    returnKeyType="done"
+                  />
+                  <Pressable
+                    style={styles.eyeIconBtn}
+                    onPress={() => setShowPassword(!showPassword)}
+                    accessibilityRole="button"
+                    accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+                  >
+                    <Ionicons
+                      name={showPassword ? "eye-off-outline" : "eye-outline"}
+                      size={20}
+                      color={colors.textSecondary}
+                    />
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+
+            {/* SUBMIT BUTTON */}
             <Pressable
               style={({ pressed }) => [
                 styles.submitButton,
@@ -189,17 +291,41 @@ export default function LoginScreen() {
                 pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] },
                 isSubmitting && styles.submitButtonDisabled,
               ]}
-              onPress={handleSendOtp}
+              onPress={authMode === "password" ? handlePasswordLogin : handleSendOtp}
               disabled={isSubmitting}
             >
               {isSubmitting ? (
                 <ActivityIndicator color="#FFFFFF" size="small" />
               ) : (
                 <>
-                  <Text style={styles.submitButtonText}>SEND VERIFICATION CODE</Text>
+                  <Text style={styles.submitButtonText}>
+                    {authMode === "password" ? "SIGN IN" : "SEND VERIFICATION CODE"}
+                  </Text>
                   <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
                 </>
               )}
+            </Pressable>
+
+            {/* MODE SWITCHER BUTTON */}
+            <Pressable
+              style={({ pressed }) => [
+                styles.modeSwitchBtn,
+                { backgroundColor: colors.goldSoft, borderColor: colors.gold },
+                pressed && { opacity: 0.8 },
+              ]}
+              onPress={() => {
+                setErrorMessage(null);
+                setAuthMode(authMode === "password" ? "otp" : "password");
+              }}
+            >
+              <Ionicons
+                name={authMode === "password" ? "sparkles-outline" : "key-outline"}
+                size={16}
+                color={colors.gold}
+              />
+              <Text style={[styles.modeSwitchText, { color: colors.gold }]}>
+                {authMode === "password" ? "Sign in with Email OTP instead" : "Sign in with Password instead"}
+              </Text>
             </Pressable>
 
             {/* OR DIVIDER */}
@@ -353,6 +479,15 @@ const styles = StyleSheet.create({
   fieldGroup: {
     gap: 6,
   },
+  passwordHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  forgotPasswordLink: {
+    fontSize: 11,
+    fontFamily: FONTS.sansBold,
+  },
   fieldLabel: {
     color: "#B8964E",
     fontSize: 9,
@@ -380,6 +515,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: FONTS.sansRegular,
   },
+  eyeIconBtn: {
+    padding: 6,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   submitButton: {
     height: 52,
     marginTop: 8,
@@ -398,6 +538,21 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontFamily: FONTS.sansExtraBold,
     letterSpacing: 1.2,
+  },
+  modeSwitchBtn: {
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 4,
+  },
+  modeSwitchText: {
+    fontSize: 12,
+    fontFamily: FONTS.sansBold,
+    letterSpacing: 0.5,
   },
   dividerRow: {
     flexDirection: "row",

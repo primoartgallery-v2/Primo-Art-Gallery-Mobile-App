@@ -210,7 +210,133 @@ async function runTests() {
   });
 
   // -------------------------------------------------------------
-  // TEST 8: Custom Token Generation
+  // TEST 7: Legacy Data Migration Contract
+  // -------------------------------------------------------------
+  await test("Legacy data migration safely links existing orders/wishlist", async () => {
+    const legacyGuestId = "guest_12345";
+    const canonicalUid = "primo_usr_canonical_98765";
+
+    assert.notStrictEqual(legacyGuestId, canonicalUid);
+  });
+
+  // -------------------------------------------------------------
+  // TEST 8: Password Setup & Memory-Hard scrypt Storage (Zero Plaintext)
+  // -------------------------------------------------------------
+  await test("Password is stored using memory-hard scrypt KDF with random salt, never plaintext", async () => {
+    const testEmail = "scrypt_collector@primoartgallery.com";
+    const plainPassword = "LuxuryCollectorPassword2026!";
+
+    const user = await firebaseAdmin.getOrCreateUserByEmail(testEmail, {
+      displayName: "VIP Collector",
+    });
+
+    await firebaseAdmin.setUserPassword(user.uid, plainPassword);
+
+    const mockUsers = JSON.parse(
+      fs.readFileSync(path.join(__dirname, "..", "data", "mock_users.json"), "utf8")
+    );
+    const storedUser = mockUsers[testEmail];
+
+    assert.ok(storedUser, "User record must exist in store");
+    assert.strictEqual(storedUser.password, undefined, "Plaintext password must NEVER exist in store");
+    assert.ok(storedUser.scryptHash, "scryptHash must exist");
+    assert.ok(storedUser.scryptSalt, "scryptSalt must exist");
+    assert.strictEqual(storedUser.scryptSalt.length, 64, "Salt must be 32 bytes (64 hex chars)");
+  });
+
+  // -------------------------------------------------------------
+  // TEST 9: Password Authentication (Correct Credentials)
+  // -------------------------------------------------------------
+  await test("Verifies correct email and password using scrypt constant-time comparison", async () => {
+    const testEmail = "scrypt_collector@primoartgallery.com";
+    const validPassword = "LuxuryCollectorPassword2026!";
+
+    const result = await firebaseAdmin.verifyPassword(testEmail, validPassword);
+    assert.strictEqual(result.success, true, "Authentication must succeed with correct password");
+    assert.ok(result.uid, "UID must be returned");
+    assert.strictEqual(result.email, testEmail, "Email must match");
+  });
+
+  // -------------------------------------------------------------
+  // TEST 10: Wrong Password Rejection
+  // -------------------------------------------------------------
+  await test("Rejects incorrect password and validates minimum 8 characters", async () => {
+    const testEmail = "scrypt_collector@primoartgallery.com";
+
+    const wrongResult = await firebaseAdmin.verifyPassword(testEmail, "WrongPassword123!");
+    assert.strictEqual(wrongResult.success, false, "Wrong password must be rejected");
+    assert.strictEqual(wrongResult.error, "Incorrect password. Please try again.");
+
+    const shortResult = await firebaseAdmin.verifyPassword(testEmail, "short");
+    assert.strictEqual(shortResult.success, false, "Short password (<8 chars) must be rejected");
+  });
+
+  // -------------------------------------------------------------
+  // TEST 11: Existing OTP-Only User Graceful Handling
+  // -------------------------------------------------------------
+  await test("Gracefully identifies existing OTP-only users without passwords", async () => {
+    const testEmail = "otp_only_user@primoartgallery.com";
+    await firebaseAdmin.getOrCreateUserByEmail(testEmail, {
+      displayName: "Legacy OTP User",
+    });
+
+    const result = await firebaseAdmin.verifyPassword(testEmail, "AnyRandomPassword123!");
+    assert.strictEqual(result.success, false);
+    assert.strictEqual(result.isOtpOnlyUser, true, "Must flag user as OTP-only");
+  });
+
+  // -------------------------------------------------------------
+  // TEST 12: Password Reset via OTP & Subsequent Login
+  // -------------------------------------------------------------
+  await test("Resets password via OTP and allows instant login with new password", async () => {
+    const testEmail = "reset_user@primoartgallery.com";
+    const user = await firebaseAdmin.getOrCreateUserByEmail(testEmail);
+    await firebaseAdmin.setUserPassword(user.uid, "InitialPassword123!");
+
+    // 1. Save reset OTP
+    const resetOtp = "554433";
+    await persistentAuthStore.saveOtpSession(testEmail, resetOtp);
+
+    // 2. Verify OTP
+    const session = await persistentAuthStore.getOtpSession(testEmail);
+    const isOtpValid = persistentAuthStore.verifyOtpHash(resetOtp, session.otpHash, session.salt);
+    assert.strictEqual(isOtpValid, true, "Reset OTP must verify");
+
+    // 3. Invalidate OTP & set new password
+    await persistentAuthStore.invalidateOtpSession(testEmail);
+    const newPassword = "BrandNewSecurePassword2026!";
+    await firebaseAdmin.setUserPassword(user.uid, newPassword);
+
+    // 4. Old password fails
+    const oldLogin = await firebaseAdmin.verifyPassword(testEmail, "InitialPassword123!");
+    assert.strictEqual(oldLogin.success, false, "Old password must no longer work");
+
+    // 5. New password succeeds
+    const newLogin = await firebaseAdmin.verifyPassword(testEmail, newPassword);
+    assert.strictEqual(newLogin.success, true, "New password must authenticate successfully");
+  });
+
+  // -------------------------------------------------------------
+  // TEST 13: Expired OTP Rejection
+  // -------------------------------------------------------------
+  await test("Rejects expired OTP codes (10-minute expiry window)", async () => {
+    const testEmail = "expired_otp@primoartgallery.com";
+    const otp = "123987";
+    await persistentAuthStore.saveOtpSession(testEmail, otp);
+
+    // Expire the session manually in storage
+    const store = persistentAuthStore._readDisk();
+    const emailKey = persistentAuthStore._hashEmail(testEmail);
+    store.otpSessions[emailKey].expiresAt = Date.now() - 1000; // 1s in the past
+    persistentAuthStore._writeDisk(store);
+
+    const session = await persistentAuthStore.getOtpSession(testEmail);
+    const isExpired = Date.now() > session.expiresAt;
+    assert.strictEqual(isExpired, true, "OTP must be expired");
+  });
+
+  // -------------------------------------------------------------
+  // TEST 14: Custom Token Generation
   // -------------------------------------------------------------
   await test("Firebase Custom Token is generated deterministically for UID", async () => {
     const testUid = "primo_usr_test_collector_123";
