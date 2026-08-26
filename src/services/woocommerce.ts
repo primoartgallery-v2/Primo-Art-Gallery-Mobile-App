@@ -1,8 +1,8 @@
-import { WOOCOMMERCE_CONFIG } from "@/constants/apiKeys";
+const API_BASE = (
+  process.env.EXPO_PUBLIC_API_URL ||
+  "https://primo-art-gallery-mobile-app.onrender.com"
+).replace(/\/$/, "");
 
-const API_BASE = WOOCOMMERCE_CONFIG.URL.replace(/\/$/, "");
-const CONSUMER_KEY = WOOCOMMERCE_CONFIG.CONSUMER_KEY;
-const CONSUMER_SECRET = WOOCOMMERCE_CONFIG.CONSUMER_SECRET;
 const DEFAULT_PER_PAGE = 10;
 
 export type WooCommerceProductImage = {
@@ -113,11 +113,8 @@ function createProductsUrl({
   exclude,
 }: GetProductsOptions) {
   const query = [
-    `consumer_key=${encodeURIComponent(CONSUMER_KEY)}`,
-    `consumer_secret=${encodeURIComponent(CONSUMER_SECRET)}`,
     `page=${page}`,
     `per_page=${perPage}`,
-    `status=publish`,
   ];
 
   if (category) {
@@ -127,7 +124,7 @@ function createProductsUrl({
     query.push(`exclude=${exclude.join(",")}`);
   }
 
-  return `${API_BASE}/wp-json/wc/v3/products?${query.join("&")}`;
+  return `${API_BASE}/api/products?${query.join("&")}`;
 }
 
 export async function getProducts(
@@ -144,7 +141,7 @@ export async function getProducts(
   const timeout = setTimeout(() => controller.abort(), 20_000);
 
   const url = createProductsUrl(options);
-  console.log("[Primo API] Fetching artworks from:", url);
+  console.log("[Primo API] Fetching artworks from proxy:", url);
 
   try {
     const response = await fetch(url, {
@@ -217,7 +214,7 @@ export async function getProduct(
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
-  const url = `${API_BASE}/wp-json/wc/v3/products/${productId}?consumer_key=${encodeURIComponent(CONSUMER_KEY)}&consumer_secret=${encodeURIComponent(CONSUMER_SECRET)}`;
+  const url = `${API_BASE}/api/products/${productId}`;
 
   try {
     const response = await fetch(url, {
@@ -268,7 +265,7 @@ export async function getArtistsList(forceRefresh = false): Promise<ArtistItem[]
     return artistsListCache.data;
   }
 
-  const url = `${API_BASE}/wp-json/wp/v2/artists?per_page=100&_embed=1`;
+  const url = `${API_BASE}/api/artists`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
 
@@ -283,29 +280,7 @@ export async function getArtistsList(forceRefresh = false): Promise<ArtistItem[]
       throw new WooCommerceError("Unable to load artists list.", response.status);
     }
 
-    const rawData = (await response.json()) as any[];
-    const parsed: ArtistItem[] = rawData
-      .map((item) => ({
-        id: item.id,
-        name:
-          item.title?.rendered
-            ?.replace(/&amp;/g, "&")
-            ?.replace(/&#0*39;/g, "'")
-            ?.replace(/&quot;/g, '"') || "Artist",
-        slug: item.slug,
-        link: item.link,
-        imageUrl: item._embedded?.["wp:featuredmedia"]?.[0]?.source_url || null,
-        category: item._embedded?.["wp:term"]?.[0]?.[0]?.name || "Contemporary Artist",
-        bio:
-          item.content?.rendered
-            ?.replace(/<[^>]*>/g, "")
-            ?.replace(/&nbsp;/g, " ")
-            ?.replace(/&amp;/g, "&")
-            ?.replace(/&#0*39;/g, "'")
-            ?.trim() || "",
-      }))
-      .filter((a) => a.name !== "." && a.name.trim().length > 0);
-
+    const parsed = (await response.json()) as ArtistItem[];
     artistsListCache = { data: parsed, timestamp: Date.now() };
     return parsed;
   } catch (error) {
@@ -331,7 +306,7 @@ export async function getArtist(
     return cached.data;
   }
 
-  const url = `${API_BASE}/wp-json/wp/v2/artists/${artistId}?_embed=1`;
+  const url = `${API_BASE}/api/artists/${artistId}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
 

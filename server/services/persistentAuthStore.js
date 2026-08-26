@@ -284,38 +284,40 @@ class PersistentAuthStore {
     const lockDurationMs = 30 * 60 * 1000; // 30 minutes
     const maxFailedAttempts = 5;
 
-    const session = await this.getOtpSession(email);
-    if (!session) return { attempts: 0, locked: false, remainingAttempts: 0 };
-
-    const newAttempts = (session.failedAttempts || 0) + 1;
-    const isLocked = newAttempts >= maxFailedAttempts;
-    const lockedUntil = isLocked ? now + lockDurationMs : 0;
-
-    const updated = {
-      ...session,
-      failedAttempts: newAttempts,
-      lockedUntil,
-    };
-
     if (this.firestore) {
       try {
-        await this.firestore.collection("auth_otp_sessions").doc(emailKey).update({
-          failedAttempts: newAttempts,
-          lockedUntil,
-        });
-        return {
-          attempts: newAttempts,
-          locked: isLocked,
-          lockedUntil,
-          remainingAttempts: Math.max(0, maxFailedAttempts - newAttempts),
-        };
+        const doc = await this.firestore.collection("auth_otp_sessions").doc(emailKey).get();
+        if (doc.exists) {
+          const session = doc.data();
+          const newAttempts = (session.failedAttempts || 0) + 1;
+          const isLocked = newAttempts >= maxFailedAttempts;
+          const lockedUntil = isLocked ? now + lockDurationMs : 0;
+          await this.firestore.collection("auth_otp_sessions").doc(emailKey).update({
+            failedAttempts: newAttempts,
+            lockedUntil,
+          });
+          return {
+            attempts: newAttempts,
+            locked: isLocked,
+            lockedUntil,
+            remainingAttempts: Math.max(0, maxFailedAttempts - newAttempts),
+          };
+        }
       } catch (err) {
         console.warn("[PersistentAuthStore] Firestore recordFailedAttempt fallback to disk:", err.message);
       }
     }
 
     const store = this._readDisk();
-    store.otpSessions[emailKey] = updated;
+    const session = store.otpSessions[emailKey];
+    if (!session) return { attempts: 0, locked: false, remainingAttempts: 0 };
+
+    const newAttempts = (session.failedAttempts || 0) + 1;
+    const isLocked = newAttempts >= maxFailedAttempts;
+    const lockedUntil = isLocked ? now + lockDurationMs : 0;
+
+    session.failedAttempts = newAttempts;
+    session.lockedUntil = lockedUntil;
     this._writeDisk(store);
 
     return {

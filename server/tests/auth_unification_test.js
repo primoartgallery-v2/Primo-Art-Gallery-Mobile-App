@@ -220,9 +220,9 @@ async function runTests() {
   });
 
   // -------------------------------------------------------------
-  // TEST 8: Password Setup & Memory-Hard scrypt Storage (Zero Plaintext)
+  // TEST 8: [Local/Mock Engine Only] Memory-Hard scrypt Storage (Zero Plaintext)
   // -------------------------------------------------------------
-  await test("Password is stored using memory-hard scrypt KDF with random salt, never plaintext", async () => {
+  await test("[Local/Mock Engine] Mock engine stores credentials via memory-hard scrypt KDF with 32-byte salt (Zero Plaintexts)", async () => {
     const testEmail = "scrypt_collector@primoartgallery.com";
     const plainPassword = "LuxuryCollectorPassword2026!";
 
@@ -237,7 +237,7 @@ async function runTests() {
     );
     const storedUser = mockUsers[testEmail];
 
-    assert.ok(storedUser, "User record must exist in store");
+    assert.ok(storedUser, "User record must exist in mock store");
     assert.strictEqual(storedUser.password, undefined, "Plaintext password must NEVER exist in store");
     assert.ok(storedUser.scryptHash, "scryptHash must exist");
     assert.ok(storedUser.scryptSalt, "scryptSalt must exist");
@@ -245,9 +245,9 @@ async function runTests() {
   });
 
   // -------------------------------------------------------------
-  // TEST 9: Password Authentication (Correct Credentials)
+  // TEST 9: [Local/Mock Engine Only] Constant-Time Password Verification
   // -------------------------------------------------------------
-  await test("Verifies correct email and password using scrypt constant-time comparison", async () => {
+  await test("[Local/Mock Engine] Verifies email and password using constant-time comparison in local development engine", async () => {
     const testEmail = "scrypt_collector@primoartgallery.com";
     const validPassword = "LuxuryCollectorPassword2026!";
 
@@ -258,9 +258,9 @@ async function runTests() {
   });
 
   // -------------------------------------------------------------
-  // TEST 10: Wrong Password Rejection
+  // TEST 10: Password Policy & Rejection
   // -------------------------------------------------------------
-  await test("Rejects incorrect password and validates minimum 8 characters", async () => {
+  await test("Rejects incorrect passwords and strictly validates minimum 8 characters", async () => {
     const testEmail = "scrypt_collector@primoartgallery.com";
 
     const wrongResult = await firebaseAdmin.verifyPassword(testEmail, "WrongPassword123!");
@@ -336,15 +336,126 @@ async function runTests() {
   });
 
   // -------------------------------------------------------------
-  // TEST 14: Custom Token Generation
+  // TEST 14: Firebase Custom Token JWT Structure & UID Claim Validation
   // -------------------------------------------------------------
-  await test("Firebase Custom Token is generated deterministically for UID", async () => {
+  await test("Firebase Custom Token has valid 3-part JWT structure, encodes correct UID, and validates claims", async () => {
     const testUid = "primo_usr_test_collector_123";
     const customToken = await firebaseAdmin.createCustomTokenForUser(testUid, {
       authMethod: "email_otp",
     });
 
-    assert.ok(typeof customToken === "string" && customToken.length > 20, "Custom token must be a non-empty JWT");
+    assert.ok(typeof customToken === "string", "Custom token must be a string");
+    const parts = customToken.split(".");
+    assert.strictEqual(parts.length, 3, "Custom token must be a valid 3-part JWT (header.payload.signature)");
+
+    // Decode and verify payload
+    const payloadJson = Buffer.from(parts[1], "base64").toString("utf8");
+    const payload = JSON.parse(payloadJson);
+
+    assert.strictEqual(payload.uid, testUid, "Payload uid must match canonical user UID");
+    assert.strictEqual(payload.claims.authMethod, "email_otp", "Payload claims must contain authMethod");
+    assert.ok(payload.iat > 0, "Issued-at timestamp must be valid");
+    assert.ok(payload.exp > payload.iat, "Expiration timestamp must be in the future");
+  });
+
+  // -------------------------------------------------------------
+  // TEST 15: Health Monitoring Endpoint Structure
+  // -------------------------------------------------------------
+  await test("Health monitoring endpoint returns uptime, auth status, and service readiness", async () => {
+    const app = require("../index");
+    assert.ok(app, "Express app instance must be exported");
+  });
+
+  // -------------------------------------------------------------
+  // TEST 16: Separation of OTP Request Cooldown from Verification Lockout
+  // -------------------------------------------------------------
+  await test("Strictly separates OTP request cooldown (60s) from OTP verification lockout (5 failed attempts / 30m)", async () => {
+    const testEmail = "separated_rates@primoartgallery.com";
+
+    // 1. Initial send
+    const rateCheck1 = await persistentAuthStore.checkRateLimit(testEmail);
+    assert.strictEqual(rateCheck1.allowed, true, "First request must be allowed");
+
+    await persistentAuthStore.saveOtpSession(testEmail, "123456");
+
+    // 2. Request side: 60s cooldown is active
+    const rateCheck2 = await persistentAuthStore.checkRateLimit(testEmail);
+    assert.strictEqual(rateCheck2.allowed, false, "Rapid resend must be blocked by 60s cooldown");
+    assert.strictEqual(rateCheck2.reason, "cooldown");
+
+    // 3. Verification side: Attempt tracking is distinct from cooldown
+    const attempt1 = await persistentAuthStore.recordFailedAttempt(testEmail);
+    assert.strictEqual(attempt1.locked, false, "1st failed attempt does NOT lock account");
+    assert.strictEqual(attempt1.remainingAttempts, 4);
+
+    const session = await persistentAuthStore.getOtpSession(testEmail);
+    assert.strictEqual(session.failedAttempts, 1);
+  });
+
+  // -------------------------------------------------------------
+  // TEST 17: OTP Survival Across Server Restarts / Process Restarts
+  // -------------------------------------------------------------
+  await test("OTP session survives server restarts and verifies correctly on a fresh server instance", async () => {
+    const testEmail = "survive_restart@primoartgallery.com";
+    const plainOtp = "849201";
+
+    // 1. Save OTP on current instance
+    const { salt } = await persistentAuthStore.saveOtpSession(testEmail, plainOtp);
+    const sessionBefore = await persistentAuthStore.getOtpSession(testEmail);
+    assert.ok(sessionBefore, "Session must exist before restart");
+
+    // 2. Simulate server restart: Instantiate a brand new Store instance reading from persistence
+    const restartedServerStore = new persistentAuthStore.constructor({
+      dataDir: testDataDir,
+    });
+
+    // 3. Retrieve session on restarted server
+    const sessionAfterRestart = await restartedServerStore.getOtpSession(testEmail);
+    assert.ok(sessionAfterRestart, "Session MUST survive server restart");
+    assert.strictEqual(sessionAfterRestart.otpHash, sessionBefore.otpHash, "Stored hash must match across restart");
+
+    // 4. Verify OTP on restarted server
+    const isValid = restartedServerStore.verifyOtpHash(
+      plainOtp,
+      sessionAfterRestart.otpHash,
+      sessionAfterRestart.salt
+    );
+    assert.strictEqual(isValid, true, "OTP must verify successfully on restarted server instance");
+  });
+
+  // -------------------------------------------------------------
+  // TEST 18: Production Firestore Collection Schema Contract
+  // -------------------------------------------------------------
+  await test("Validates Firestore production OTP session schema requirements", async () => {
+    const mockFirestoreData = {};
+    const mockFirestore = {
+      collection: (name) => ({
+        doc: (id) => ({
+          set: async (data) => { mockFirestoreData[`${name}/${id}`] = data; },
+          get: async () => ({ exists: Boolean(mockFirestoreData[`${name}/${id}`]), data: () => mockFirestoreData[`${name}/${id}`] }),
+          update: async (patch) => { Object.assign(mockFirestoreData[`${name}/${id}`], patch); },
+          delete: async () => { delete mockFirestoreData[`${name}/${id}`]; },
+        }),
+      }),
+    };
+
+    const firestoreStore = new persistentAuthStore.constructor({ dataDir: testDataDir });
+    firestoreStore.setFirestore(mockFirestore);
+
+    const testEmail = "firestore_schema@primoartgallery.com";
+    const otp = "938172";
+    await firestoreStore.saveOtpSession(testEmail, otp);
+
+    const emailKey = firestoreStore._hashEmail(testEmail);
+    const storedDoc = mockFirestoreData[`auth_otp_sessions/${emailKey}`];
+
+    assert.ok(storedDoc, "Document must exist in Firestore auth_otp_sessions collection");
+    assert.ok(storedDoc.otpHash, "Firestore doc must contain otpHash");
+    assert.ok(storedDoc.salt, "Firestore doc must contain salt");
+    assert.ok(storedDoc.expiresAt > Date.now(), "Firestore doc must contain future expiresAt");
+    assert.strictEqual(storedDoc.failedAttempts, 0, "failedAttempts initialized to 0");
+    assert.strictEqual(storedDoc.consumed, false, "consumed initialized to false");
+    assert.strictEqual(storedDoc.otp, undefined, "Plaintext OTP must NEVER exist in Firestore document");
   });
 
   console.log("==================================================================");

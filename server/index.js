@@ -84,9 +84,20 @@ function getAuthHeader() {
   return `Basic ${token}`;
 }
 
-// Health check endpoint
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok", service: "Primo Art Gallery Proxy & Auth Server", timestamp: new Date().toISOString() });
+// Health check endpoint for Render & container monitoring
+app.get(["/health", "/api/health"], (_req, res) => {
+  res.json({
+    status: "ok",
+    service: "Primo Art Gallery Proxy & Auth Server",
+    uptime: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+    services: {
+      auth: "ready",
+      woocommerce: Boolean(WOOCOMMERCE_URL && CONSUMER_KEY && CONSUMER_SECRET) ? "ready" : "unconfigured",
+      email: Boolean(process.env.RESEND_API_KEY) ? "ready" : "unconfigured",
+      storage: persistentAuthStore.useFirestore ? "firestore" : "persistent_disk",
+    },
+  });
 });
 
 app.get(["/api/auth/health", "/api/api/auth/health", "/auth/health"], (_req, res) => {
@@ -498,41 +509,45 @@ app.post(["/api/auth/google-verify", "/api/api/auth/google-verify", "/auth/googl
 });
 
 // ==========================================
-// WOOCOMMERCE PROXY ENDPOINTS
+// WOOCOMMERCE PROXY ENDPOINTS (HARDENED)
 // ==========================================
 
+const ALLOWED_ORDERBY = new Set(["date", "id", "include", "title", "slug", "price", "popularity", "rating"]);
+const ALLOWED_ORDER = new Set(["asc", "desc", "ASC", "DESC"]);
+
 // GET /api/products
-app.get("/api/products", async (req, res) => {
+app.get(["/api/products", "/products"], async (req, res) => {
   if (!WOOCOMMERCE_URL || !CONSUMER_KEY || !CONSUMER_SECRET) {
     return res.status(503).json({ error: "Gallery proxy configuration pending." });
   }
 
-  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  // Strict input validation
+  const page = Math.min(1000, Math.max(1, parseInt(req.query.page, 10) || 1));
   const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page, 10) || 10));
   const category = req.query.category ? String(req.query.category).trim() : null;
   const exclude = req.query.exclude ? String(req.query.exclude).trim() : null;
-  const search = req.query.search ? String(req.query.search).trim() : null;
-  const orderby = req.query.orderby ? String(req.query.orderby).trim() : null;
-  const order = req.query.order ? String(req.query.order).trim() : null;
+  const search = req.query.search ? String(req.query.search).trim().slice(0, 100) : null;
+  const orderby = req.query.orderby ? String(req.query.orderby).trim().toLowerCase() : null;
+  const order = req.query.order ? String(req.query.order).trim().toLowerCase() : null;
 
   const params = new URLSearchParams();
   params.set("page", String(page));
   params.set("per_page", String(perPage));
   params.set("status", "publish");
 
-  if (category && /^\d+$/.test(category)) {
+  if (category && /^\d+(,\d+)*$/.test(category)) {
     params.set("category", category);
   }
-  if (exclude && /^[\d,]+$/.test(exclude)) {
+  if (exclude && /^\d+(,\d+)*$/.test(exclude)) {
     params.set("exclude", exclude);
   }
-  if (search) {
+  if (search && search.length > 0) {
     params.set("search", search);
   }
-  if (orderby) {
+  if (orderby && ALLOWED_ORDERBY.has(orderby)) {
     params.set("orderby", orderby);
   }
-  if (order) {
+  if (order && ALLOWED_ORDER.has(order)) {
     params.set("order", order);
   }
 
@@ -580,7 +595,7 @@ app.get("/api/products", async (req, res) => {
 });
 
 // GET /api/products/:id
-app.get("/api/products/:id", async (req, res) => {
+app.get(["/api/products/:id", "/products/:id"], async (req, res) => {
   if (!WOOCOMMERCE_URL || !CONSUMER_KEY || !CONSUMER_SECRET) {
     return res.status(503).json({ error: "Gallery proxy configuration pending." });
   }
@@ -633,8 +648,67 @@ app.get("/api/products/:id", async (req, res) => {
   }
 });
 
+// GET /api/artists
+app.get(["/api/artists", "/artists"], async (req, res) => {
+  if (!WOOCOMMERCE_URL) {
+    return res.status(503).json({ error: "Gallery proxy configuration pending." });
+  }
+
+  const targetUrl = `${WOOCOMMERCE_URL}/wp-json/wp/v2/artists?per_page=100&_embed=1`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+
+  try {
+    const upstreamRes = await fetch(targetUrl, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+
+    if (!upstreamRes.ok) {
+      return res.status(upstreamRes.status).json({
+        error: "Failed to fetch artists from gallery server.",
+        status: upstreamRes.status,
+      });
+    }
+
+    const rawData = await upstreamRes.json();
+    const parsed = rawData
+      .map((item) => ({
+        id: item.id,
+        name:
+          item.title?.rendered
+            ?.replace(/&amp;/g, "&")
+            ?.replace(/&#0*39;/g, "'")
+            ?.replace(/&quot;/g, '"') || "Artist",
+        slug: item.slug,
+        link: item.link,
+        imageUrl: item._embedded?.["wp:featuredmedia"]?.[0]?.source_url || null,
+        category: item._embedded?.["wp:term"]?.[0]?.[0]?.name || "Contemporary Artist",
+        bio:
+          item.content?.rendered
+            ?.replace(/<[^>]*>/g, "")
+            ?.replace(/&nbsp;/g, " ")
+            ?.replace(/&amp;/g, "&")
+            ?.replace(/&#0*39;/g, "'")
+            ?.trim() || "",
+      }))
+      .filter((a) => a.name !== "." && a.name.trim().length > 0);
+
+    return res.json(parsed);
+  } catch (err) {
+    if (err.name === "AbortError") {
+      return res.status(504).json({ error: "Artists request timed out." });
+    }
+    return res.status(502).json({ error: "Unable to connect to artists service." });
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
 // GET /api/artists/:id
-app.get("/api/artists/:id", async (req, res) => {
+app.get(["/api/artists/:id", "/artists/:id"], async (req, res) => {
   if (!WOOCOMMERCE_URL) {
     return res.status(503).json({ error: "Gallery proxy configuration pending." });
   }
@@ -644,7 +718,7 @@ app.get("/api/artists/:id", async (req, res) => {
     return res.status(400).json({ error: "Invalid artist ID." });
   }
 
-  const targetUrl = `${WOOCOMMERCE_URL}/wp-json/wp/v2/artists/${id}`;
+  const targetUrl = `${WOOCOMMERCE_URL}/wp-json/wp/v2/artists/${id}?_embed=1`;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
@@ -682,7 +756,7 @@ app.get("/api/artists/:id", async (req, res) => {
 });
 
 // GET /api/categories
-app.get("/api/categories", async (req, res) => {
+app.get(["/api/categories", "/categories"], async (req, res) => {
   if (!WOOCOMMERCE_URL || !CONSUMER_KEY || !CONSUMER_SECRET) {
     return res.status(503).json({ error: "Gallery proxy configuration pending." });
   }

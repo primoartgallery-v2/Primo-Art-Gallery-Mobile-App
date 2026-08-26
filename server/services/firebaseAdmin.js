@@ -234,7 +234,7 @@ async function verifyGoogleIdToken(idToken) {
 
 /**
  * Sets or updates a user's password securely in Firebase Authentication.
- * In mock mode, uses memory-hard scrypt KDF with cryptographically random salt.
+ * In local/mock development mode, uses memory-hard scrypt KDF for offline development.
  */
 async function setUserPassword(uid, password) {
   if (!password || typeof password !== "string" || password.length < 8) {
@@ -243,17 +243,18 @@ async function setUserPassword(uid, password) {
 
   const { auth, isMock } = initFirebaseAdmin();
 
+  // PRODUCTION PATH: Firebase Authentication is the ONLY canonical password store
   if (!isMock && auth) {
     try {
       await auth.updateUser(uid, { password });
       return { success: true };
     } catch (err) {
-      console.warn("[FirebaseAdmin] Live updateUser password notice:", err.message);
+      console.error("[FirebaseAdmin] Live updateUser password error:", err.message);
       throw err;
     }
   }
 
-  // Memory-hard scrypt KDF for mock/offline storage (Zero plaintexts)
+  // LOCAL / MOCK DEVELOPMENT FALLBACK ONLY (Never executed in production)
   const users = readMockUsers();
   let userEmail = null;
 
@@ -278,8 +279,8 @@ async function setUserPassword(uid, password) {
 }
 
 /**
- * Verifies email and password using official Firebase Identity Toolkit REST API
- * where configured, or memory-hard scrypt constant-time comparison in mock engine.
+ * Verifies email and password using official Firebase Identity Toolkit REST API.
+ * In local/mock development mode, uses memory-hard scrypt fallback for offline testing.
  */
 async function verifyPassword(email, password) {
   if (!email || !password || typeof password !== "string" || password.length < 8) {
@@ -287,10 +288,16 @@ async function verifyPassword(email, password) {
   }
 
   const cleanEmail = String(email).trim().toLowerCase();
+  const { isMock } = initFirebaseAdmin();
   const firebaseApiKey = process.env.FIREBASE_WEB_API_KEY || process.env.FIREBASE_API_KEY;
 
-  // Use official Firebase Identity Toolkit REST API when apiKey is provided
-  if (firebaseApiKey) {
+  // PRODUCTION PATH: Firebase Authentication / Google Cloud Identity Toolkit
+  if (!isMock || firebaseApiKey) {
+    if (!firebaseApiKey) {
+      console.error("[FirebaseAdmin] FIREBASE_WEB_API_KEY missing in live production environment.");
+      return { success: false, error: "Authentication service temporarily unavailable." };
+    }
+
     try {
       const response = await fetch(
         `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${firebaseApiKey}`,
@@ -329,11 +336,12 @@ async function verifyPassword(email, password) {
 
       return { success: false, error: data.error?.message || "Invalid email or password." };
     } catch (err) {
-      console.warn("[FirebaseAdmin] Firebase Identity Toolkit fetch notice:", err.message);
+      console.error("[FirebaseAdmin] Live Firebase Identity Toolkit fetch error:", err.message);
+      return { success: false, error: "Unable to verify credentials with authentication server." };
     }
   }
 
-  // Secure scrypt verification for mock/offline engine
+  // LOCAL / MOCK DEVELOPMENT FALLBACK ONLY (Offline development when Firebase is unconfigured)
   const users = readMockUsers();
   const user = users[cleanEmail];
 
@@ -368,7 +376,7 @@ async function verifyPassword(email, password) {
       photoURL: user.photoURL || "",
     };
   } catch (err) {
-    console.error("[FirebaseAdmin] scrypt verification error:", err.message);
+    console.error("[FirebaseAdmin] Mock scrypt verification error:", err.message);
     return { success: false, error: "Authentication verification failed." };
   }
 }
