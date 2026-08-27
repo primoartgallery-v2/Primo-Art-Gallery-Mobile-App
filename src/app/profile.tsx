@@ -28,6 +28,11 @@ import { FONTS } from "@/constants/typography";
 import { useAuth } from "@/context/AuthContext";
 import { useWishlist } from "@/context/WishlistContext";
 import { useAppTheme } from "@/hooks/useAppTheme";
+import {
+  getLocalRecentlyViewed,
+  getCloudRecentlyViewed,
+  type RecentlyViewedItem,
+} from "@/services/recentlyViewedStorage";
 import type { WooCommerceProduct } from "@/services/woocommerce";
 
 const AVATAR_ICON_MAP: Record<string, any> = {
@@ -44,6 +49,7 @@ export default function ProfileScreen() {
   const { colors, isDark } = useAppTheme();
   const { user, logout } = useAuth();
   const { savedProducts, removeFromWishlist } = useWishlist();
+  const [recentlyViewed, setRecentlyViewed] = useState<RecentlyViewedItem[]>([]);
 
   // Modals state
   const [showAboutModal, setShowAboutModal] = useState(false);
@@ -53,6 +59,22 @@ export default function ProfileScreen() {
   const [showManageAddressModal, setShowManageAddressModal] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+
+  // Load recently viewed artworks for active collector session (or guest)
+  React.useEffect(() => {
+    getLocalRecentlyViewed(user?.id)
+      .then((items) => {
+        setRecentlyViewed(items);
+        if (user?.id) {
+          getCloudRecentlyViewed().then((cloudItems) => {
+            if (cloudItems && cloudItems.length > 0) {
+              setRecentlyViewed(cloudItems);
+            }
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }, [user?.id]);
 
   const handleAction = (callback: () => void) => {
     try {
@@ -389,6 +411,74 @@ export default function ProfileScreen() {
             </View>
           )}
         </View>
+
+        {/* RECENTLY VIEWED ARTWORKS SECTION */}
+        {recentlyViewed.length > 0 ? (
+          <View style={styles.wishlistSection}>
+            <View style={styles.sectionHeaderRow}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Text style={[styles.sectionHeader, { color: colors.gold }]}>RECENTLY VIEWED</Text>
+                <Text
+                  style={[
+                    styles.wishlistCountBadge,
+                    { backgroundColor: colors.goldBadge, color: colors.goldBadgeText },
+                  ]}
+                >
+                  {recentlyViewed.length}
+                </Text>
+              </View>
+            </View>
+
+            <FlatList
+              horizontal
+              data={recentlyViewed}
+              keyExtractor={(item) => String(item.id)}
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.wishlistList}
+              renderItem={({ item }) => (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.savedCard,
+                    { backgroundColor: colors.card, borderColor: colors.border },
+                    pressed && { transform: [{ scale: 0.97 }], opacity: 0.95 },
+                  ]}
+                  onPress={() => handleAction(() => router.push(`/painting/${item.id}` as any))}
+                >
+                  <View
+                    style={[
+                      styles.savedCardImageWrap,
+                      { backgroundColor: isDark ? "#20222C" : "#FAF6EC" },
+                    ]}
+                  >
+                    {item.imageUrl ? (
+                      <ExpoImage
+                        source={{ uri: item.imageUrl }}
+                        style={styles.savedCardImage}
+                        contentFit="cover"
+                        cachePolicy="memory-disk"
+                      />
+                    ) : (
+                      <View style={styles.savedCardImageFallback}>
+                        <Ionicons name="image-outline" size={24} color={colors.gold} />
+                      </View>
+                    )}
+                  </View>
+                  <View style={styles.savedCardBody}>
+                    <Text
+                      style={[styles.savedCardTitle, { color: colors.text }]}
+                      numberOfLines={1}
+                    >
+                      {item.name}
+                    </Text>
+                    <Text style={[styles.savedCardPrice, { color: colors.gold }]}>
+                      {item.price ? `₹ ${Number(item.price).toLocaleString("en-IN")}` : "View Details"}
+                    </Text>
+                  </View>
+                </Pressable>
+              )}
+            />
+          </View>
+        ) : null}
 
         {/* ACCOUNT & ADDRESSES SECTION */}
         <Text style={[styles.sectionHeader, { color: colors.gold, marginTop: 24 }]}>

@@ -27,14 +27,22 @@ import { AppBottomNav } from "@/components/app-bottom-nav";
 import { AboutContactModal } from "@/components/AboutContactModal";
 import { GALLERY_CONFIG } from "@/constants/galleryConfig";
 import { FONTS } from "@/constants/typography";
+import { useAuth } from "@/context/AuthContext";
 import { useWishlist } from "@/context/WishlistContext";
 import { useAppTheme } from "@/hooks/useAppTheme";
+import {
+  getLocalRecentlyViewed,
+  getCloudRecentlyViewed,
+  type RecentlyViewedItem,
+} from "@/services/recentlyViewedStorage";
 
 export default function HomeScreen() {
   const router = useRouter();
   const { colors, isDark } = useAppTheme();
+  const { user } = useAuth();
   const [products, setProducts] = useState<WooCommerceProduct[]>([]);
   const [artists, setArtists] = useState<ArtistItem[]>([]);
+  const [recentlyViewed, setRecentlyViewed] = useState<RecentlyViewedItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -92,7 +100,21 @@ export default function HomeScreen() {
     getArtistsList()
       .then(setArtists)
       .catch(() => {});
-  }, [loadFirstPage]);
+
+    // Load recently viewed artworks for active collector session (or guest)
+    getLocalRecentlyViewed(user?.id)
+      .then((items) => {
+        setRecentlyViewed(items);
+        if (user?.id) {
+          getCloudRecentlyViewed().then((cloudItems) => {
+            if (cloudItems && cloudItems.length > 0) {
+              setRecentlyViewed(cloudItems);
+            }
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }, [loadFirstPage, user?.id]);
 
   const handleActionPress = (callback: () => void) => {
     try {
@@ -509,6 +531,63 @@ export default function HomeScreen() {
             <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
           </Pressable>
         </View>
+
+        {/* RECENTLY VIEWED ARTWORKS CAROUSEL */}
+        {recentlyViewed.length > 0 ? (
+          <View style={styles.recentlyViewedSection}>
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text style={[styles.sectionSmall, { color: colors.gold }]}>CONTINUE EXPLORING</Text>
+                <Text style={[styles.sectionTitle, { color: colors.text }]}>Recently Viewed</Text>
+              </View>
+              <Pressable onPress={() => handleActionPress(() => router.push("/explore"))}>
+                <Text style={[styles.viewAll, { color: colors.gold }]}>Browse All</Text>
+              </Pressable>
+            </View>
+
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.recentCarouselContent}
+            >
+              {recentlyViewed.map((item) => (
+                <Pressable
+                  key={item.id}
+                  style={({ pressed }) => [
+                    styles.recentCard,
+                    { backgroundColor: colors.card, borderColor: colors.border },
+                    pressed && styles.scalePressed,
+                  ]}
+                  onPress={() => handleActionPress(() => router.push(`/painting/${item.id}` as any))}
+                >
+                  <View
+                    style={[
+                      styles.recentImageFrame,
+                      { backgroundColor: isDark ? "#20222C" : "#ECE5D8" },
+                    ]}
+                  >
+                    {item.imageUrl ? (
+                      <ExpoImage
+                        source={{ uri: item.imageUrl }}
+                        style={styles.recentImage}
+                        contentFit="cover"
+                        cachePolicy="memory-disk"
+                      />
+                    ) : (
+                      <Ionicons name="image-outline" size={24} color={colors.gold} />
+                    )}
+                  </View>
+                  <Text style={[styles.recentName, { color: colors.text }]} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                  <Text style={[styles.recentPrice, { color: colors.gold }]}>
+                    {item.price ? `₹ ${Number(item.price).toLocaleString("en-IN")}` : "View Details"}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        ) : null}
 
         {/* LIVE WOO COMMERCE PRODUCTS */}
         <View style={styles.sectionHeader}>
@@ -1591,5 +1670,41 @@ const styles = StyleSheet.create({
   scalePressed: {
     transform: [{ scale: 0.96 }],
     opacity: 0.9,
+  },
+  recentlyViewedSection: {
+    marginBottom: 8,
+  },
+  recentCarouselContent: {
+    paddingHorizontal: 20,
+    gap: 12,
+    paddingBottom: 6,
+  },
+  recentCard: {
+    width: 140,
+    padding: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  recentImageFrame: {
+    width: "100%",
+    height: 125,
+    borderRadius: 12,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 8,
+  },
+  recentImage: {
+    width: "100%",
+    height: "100%",
+  },
+  recentName: {
+    fontSize: 12,
+    fontFamily: FONTS.sansBold,
+    marginBottom: 3,
+  },
+  recentPrice: {
+    fontSize: 11,
+    fontFamily: FONTS.sansExtraBold,
   },
 });

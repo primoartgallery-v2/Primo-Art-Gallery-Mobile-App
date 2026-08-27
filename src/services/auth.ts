@@ -1,5 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getFirebaseAuth, getFirebaseAuthModule } from "./firebase";
+import { setAuthToken } from "./collectorStorage";
+import { mergeGuestRecentlyViewed } from "./recentlyViewedStorage";
+import { mergeGuestSavedArtists } from "./savedArtistsStorage";
 
 // Storage keys
 export const AUTH_USER_KEY = "@primo_auth_user";
@@ -186,9 +189,12 @@ export async function verifyEmailOtp(
 
   // Save active user session
   await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+  await setAuthToken(customToken);
 
-  // Run non-destructive legacy data migration
+  // Run non-destructive legacy data migration and guest merges
   await checkAndMigrateLegacyData(user.id, user.email);
+  void mergeGuestRecentlyViewed(user.id);
+  void mergeGuestSavedArtists(user.id);
 
   return user;
 }
@@ -263,9 +269,12 @@ export async function loginWithEmailPassword(
 
   // Save active user session
   await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+  await setAuthToken(customToken);
 
-  // Run non-destructive legacy data migration
+  // Run non-destructive legacy data migration and guest merges
   await checkAndMigrateLegacyData(user.id, user.email);
+  void mergeGuestRecentlyViewed(user.id);
+  void mergeGuestSavedArtists(user.id);
 
   return user;
 }
@@ -347,9 +356,12 @@ export async function resetPasswordWithOtp(
 
   // Save active user session
   await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+  await setAuthToken(customToken);
 
-  // Run non-destructive legacy data migration
+  // Run non-destructive legacy data migration and guest merges
   await checkAndMigrateLegacyData(user.id, user.email);
+  void mergeGuestRecentlyViewed(user.id);
+  void mergeGuestSavedArtists(user.id);
 
   return user;
 }
@@ -388,9 +400,12 @@ export async function signInWithGoogle(
 
   // Save active user session
   await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+  await setAuthToken(customToken);
 
-  // Run non-destructive legacy data migration
+  // Run non-destructive legacy data migration and guest merges
   await checkAndMigrateLegacyData(user.id, user.email);
+  void mergeGuestRecentlyViewed(user.id);
+  void mergeGuestSavedArtists(user.id);
 
   return user;
 }
@@ -450,6 +465,7 @@ export async function logoutUser(): Promise<void> {
     }
   } catch {}
   await AsyncStorage.removeItem(AUTH_USER_KEY);
+  await setAuthToken(null);
 }
 
 /**

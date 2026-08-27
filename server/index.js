@@ -6,6 +6,7 @@ const cors = require("cors");
 const crypto = require("crypto");
 
 const persistentAuthStore = require("./services/persistentAuthStore");
+const collectorStore = require("./services/collectorStore");
 const emailService = require("./services/emailService");
 const firebaseAdmin = require("./services/firebaseAdmin");
 
@@ -509,6 +510,284 @@ app.post(["/api/auth/google-verify", "/api/api/auth/google-verify", "/auth/googl
 });
 
 // ==========================================
+// COLLECTOR DATA ENDPOINTS (UID-SCOPED)
+// ==========================================
+
+/**
+ * GET /api/collector/wishlist
+ * Retrieves wishlist items for the authenticated user.
+ * Authenticated UID is derived exclusively from the verified Bearer token.
+ */
+app.get(["/api/collector/wishlist", "/collector/wishlist"], async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const verifiedUser = await firebaseAdmin.verifyAuthToken(authHeader);
+
+  if (!verifiedUser || !verifiedUser.uid) {
+    return res.status(401).json({ error: "Authentication required to access wishlist." });
+  }
+
+  try {
+    const items = await collectorStore.getWishlist(verifiedUser.uid);
+    return res.json({ success: true, items });
+  } catch (err) {
+    console.error("[Collector API] getWishlist error:", err.message);
+    return res.status(500).json({ error: "Failed to retrieve wishlist." });
+  }
+});
+
+/**
+ * POST /api/collector/wishlist
+ * Persists wishlist items for the authenticated user.
+ * Authenticated UID is derived exclusively from the verified Bearer token.
+ */
+app.post(["/api/collector/wishlist", "/collector/wishlist"], async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const verifiedUser = await firebaseAdmin.verifyAuthToken(authHeader);
+
+  if (!verifiedUser || !verifiedUser.uid) {
+    return res.status(401).json({ error: "Authentication required to update wishlist." });
+  }
+
+  const items = req.body?.items;
+  if (!Array.isArray(items)) {
+    return res.status(400).json({ error: "Items array is required." });
+  }
+
+  try {
+    const result = await collectorStore.saveWishlist(verifiedUser.uid, items);
+    return res.json({ success: true, count: result.count });
+  } catch (err) {
+    console.error("[Collector API] saveWishlist error:", err.message);
+    return res.status(500).json({ error: "Failed to save wishlist." });
+  }
+});
+
+/**
+ * GET /api/collector/recently-viewed
+ * Retrieves recently viewed artworks for the authenticated user (max 20).
+ * Authenticated UID is derived exclusively from the verified Bearer token.
+ */
+app.get(["/api/collector/recently-viewed", "/collector/recently-viewed"], async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const verifiedUser = await firebaseAdmin.verifyAuthToken(authHeader);
+
+  if (!verifiedUser || !verifiedUser.uid) {
+    return res.status(401).json({ error: "Authentication required to access recently viewed artworks." });
+  }
+
+  try {
+    const items = await collectorStore.getRecentlyViewed(verifiedUser.uid);
+    return res.json({ success: true, items });
+  } catch (err) {
+    console.error("[Collector API] getRecentlyViewed error:", err.message);
+    return res.status(500).json({ error: "Failed to retrieve recently viewed artworks." });
+  }
+});
+
+/**
+ * POST /api/collector/recently-viewed
+ * Persists recently viewed artworks for the authenticated user.
+ * Authenticated UID is derived exclusively from the verified Bearer token.
+ */
+app.post(["/api/collector/recently-viewed", "/collector/recently-viewed"], async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const verifiedUser = await firebaseAdmin.verifyAuthToken(authHeader);
+
+  if (!verifiedUser || !verifiedUser.uid) {
+    return res.status(401).json({ error: "Authentication required to update recently viewed artworks." });
+  }
+
+  const items = req.body?.items;
+  if (!Array.isArray(items)) {
+    return res.status(400).json({ error: "Items array is required." });
+  }
+
+  try {
+    const result = await collectorStore.saveRecentlyViewed(verifiedUser.uid, items);
+    return res.json({ success: true, count: result.count });
+  } catch (err) {
+    console.error("[Collector API] saveRecentlyViewed error:", err.message);
+    return res.status(500).json({ error: "Failed to save recently viewed artworks." });
+  }
+});
+
+/**
+ * GET /api/collector/saved-artists
+ * Retrieves list of saved artist IDs for the authenticated user.
+ * Authenticated UID is derived exclusively from the verified Bearer token.
+ */
+app.get(["/api/collector/saved-artists", "/collector/saved-artists"], async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const verifiedUser = await firebaseAdmin.verifyAuthToken(authHeader);
+
+  if (!verifiedUser || !verifiedUser.uid) {
+    return res.status(401).json({ error: "Authentication required to access saved artists." });
+  }
+
+  try {
+    const artistIds = await collectorStore.getSavedArtists(verifiedUser.uid);
+    return res.json({ success: true, artistIds });
+  } catch (err) {
+    console.error("[Collector API] getSavedArtists error:", err.message);
+    return res.status(500).json({ error: "Failed to retrieve saved artists." });
+  }
+});
+
+/**
+ * POST /api/collector/saved-artists
+ * Persists list of saved artist IDs for the authenticated user.
+ * Authenticated UID is derived exclusively from the verified Bearer token.
+ */
+app.post(["/api/collector/saved-artists", "/collector/saved-artists"], async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const verifiedUser = await firebaseAdmin.verifyAuthToken(authHeader);
+
+  if (!verifiedUser || !verifiedUser.uid) {
+    return res.status(401).json({ error: "Authentication required to update saved artists." });
+  }
+
+  const artistIds = req.body?.artistIds;
+  if (!Array.isArray(artistIds)) {
+    return res.status(400).json({ error: "artistIds array is required." });
+  }
+
+  try {
+    const result = await collectorStore.saveSavedArtists(verifiedUser.uid, artistIds);
+    return res.json({ success: true, count: result.count, artistIds: result.artistIds });
+  } catch (err) {
+    console.error("[Collector API] saveSavedArtists error:", err.message);
+    return res.status(500).json({ error: "Failed to save saved artists." });
+  }
+});
+
+// ==========================================
+// ARTWORK ENQUIRIES API (SECURE & RATE-LIMITED)
+// ==========================================
+
+const enquiryRateLimits = new Map();
+
+function checkEnquiryRateLimit(ip, email) {
+  const key = `${ip || "unknown"}_${(email || "").toLowerCase().trim()}`;
+  const now = Date.now();
+  const ONE_HOUR = 60 * 60 * 1000;
+
+  const timestamps = (enquiryRateLimits.get(key) || []).filter((t) => now - t < ONE_HOUR);
+
+  if (timestamps.length >= 5) {
+    enquiryRateLimits.set(key, timestamps);
+    return { allowed: false, remaining: 0 };
+  }
+
+  timestamps.push(now);
+  enquiryRateLimits.set(key, timestamps);
+  return { allowed: true, remaining: 5 - timestamps.length };
+}
+
+/**
+ * POST /api/enquiries
+ * Handles collector acquisition enquiries with strict server-side UID derivation,
+ * input validation, anti-spam rate limiting, Firestore persistence, and Resend email dispatch.
+ */
+app.post(["/api/enquiries", "/enquiries"], async (req, res) => {
+  const clientIp = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "127.0.0.1";
+
+  // 1. Authenticated UID resolution (Zero-trust client UID)
+  let collectorUid = null;
+  const authHeader = req.headers.authorization;
+  if (authHeader) {
+    try {
+      const verifiedUser = await firebaseAdmin.verifyAuthToken(authHeader);
+      if (verifiedUser && verifiedUser.uid) {
+        collectorUid = verifiedUser.uid;
+      }
+    } catch {
+      // Invalid token falls back to guest with null UID
+      collectorUid = null;
+    }
+  }
+
+  // 2. Input validation & sanitization
+  const rawBody = req.body || {};
+
+  // artworkId: required integer
+  const artworkId = Number(rawBody.artworkId);
+  if (!rawBody.artworkId || isNaN(artworkId) || artworkId <= 0) {
+    return res.status(400).json({ error: "A valid numeric artworkId is required." });
+  }
+
+  // artworkTitle: required, 1-150 chars
+  const artworkTitle = String(rawBody.artworkTitle || "").trim();
+  if (!artworkTitle || artworkTitle.length < 1 || artworkTitle.length > 150) {
+    return res.status(400).json({ error: "Artwork title is required (1-150 characters)." });
+  }
+
+  // collectorName: required, 2-80 chars
+  const collectorName = String(rawBody.collectorName || "").trim();
+  if (!collectorName || collectorName.length < 2 || collectorName.length > 80) {
+    return res.status(400).json({ error: "Collector name is required (2-80 characters)." });
+  }
+
+  // collectorEmail: required valid email, 5-100 chars
+  const collectorEmail = String(rawBody.collectorEmail || "").trim().toLowerCase();
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (
+    !collectorEmail ||
+    collectorEmail.length < 5 ||
+    collectorEmail.length > 100 ||
+    !emailRegex.test(collectorEmail)
+  ) {
+    return res.status(400).json({ error: "A valid email address is required (5-100 characters)." });
+  }
+
+  // collectorPhone: optional, max 25 chars
+  const collectorPhone = rawBody.collectorPhone
+    ? String(rawBody.collectorPhone).trim().slice(0, 25)
+    : null;
+
+  // message: required, 10-1000 chars
+  const message = String(rawBody.message || "").trim();
+  if (!message || message.length < 10 || message.length > 1000) {
+    return res.status(400).json({ error: "Message is required (10-1000 characters)." });
+  }
+
+  // 3. Anti-Spam Rate Limiting (5 per hour)
+  const rateLimit = checkEnquiryRateLimit(clientIp, collectorEmail);
+  if (!rateLimit.allowed) {
+    return res.status(429).json({
+      error: "Enquiry limit exceeded. Maximum 5 enquiries allowed per hour. Please try again later.",
+    });
+  }
+
+  // 4. Persistence to Firestore
+  try {
+    const result = await collectorStore.saveEnquiry({
+      artworkId,
+      artworkTitle,
+      collectorUid,
+      collectorName,
+      collectorEmail,
+      collectorPhone,
+      message,
+      clientIp,
+    });
+
+    // 5. Asynchronous Email Dispatch (non-blocking, failure caught gracefully)
+    void emailService.sendArtworkEnquiryEmail(result.enquiry).catch((emailErr) => {
+      console.error("[Enquiry API] Email dispatch notice:", emailErr.message);
+    });
+
+    return res.status(201).json({
+      success: true,
+      enquiryId: result.enquiryId,
+      message: "Your acquisition enquiry has been received by Primo Art Gallery curators.",
+    });
+  } catch (err) {
+    console.error("[Enquiry API] Save error:", err.message);
+    return res.status(500).json({ error: "Failed to record enquiry. Please try again." });
+  }
+});
+
+// ==========================================
 // WOOCOMMERCE PROXY ENDPOINTS (HARDENED)
 // ==========================================
 
@@ -530,6 +809,24 @@ app.get(["/api/products", "/products"], async (req, res) => {
   const orderby = req.query.orderby ? String(req.query.orderby).trim().toLowerCase() : null;
   const order = req.query.order ? String(req.query.order).trim().toLowerCase() : null;
 
+  // Price filtering parameters
+  const minPrice = req.query.min_price !== undefined && req.query.min_price !== null && req.query.min_price !== ""
+    ? parseFloat(String(req.query.min_price))
+    : null;
+  const maxPrice = req.query.max_price !== undefined && req.query.max_price !== null && req.query.max_price !== ""
+    ? parseFloat(String(req.query.max_price))
+    : null;
+
+  if (minPrice !== null && (isNaN(minPrice) || minPrice < 0)) {
+    return res.status(400).json({ error: "Invalid min_price. Must be a non-negative number." });
+  }
+  if (maxPrice !== null && (isNaN(maxPrice) || maxPrice < 0)) {
+    return res.status(400).json({ error: "Invalid max_price. Must be a non-negative number." });
+  }
+  if (minPrice !== null && maxPrice !== null && minPrice > maxPrice) {
+    return res.status(400).json({ error: "min_price cannot be greater than max_price." });
+  }
+
   const params = new URLSearchParams();
   params.set("page", String(page));
   params.set("per_page", String(perPage));
@@ -543,6 +840,12 @@ app.get(["/api/products", "/products"], async (req, res) => {
   }
   if (search && search.length > 0) {
     params.set("search", search);
+  }
+  if (minPrice !== null) {
+    params.set("min_price", String(minPrice));
+  }
+  if (maxPrice !== null) {
+    params.set("max_price", String(maxPrice));
   }
   if (orderby && ALLOWED_ORDERBY.has(orderby)) {
     params.set("orderby", orderby);
@@ -778,7 +1081,7 @@ app.get(["/api/categories", "/categories"], async (req, res) => {
       method: "GET",
       headers: {
         Accept: "application/json",
-        Authorization: getAuthHeader(),
+        "User-Agent": "PrimoArtGallery-App/1.0",
       },
       signal: controller.signal,
     });

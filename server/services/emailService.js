@@ -186,7 +186,123 @@ async function sendOtpEmail({ email, otpCode }) {
   }
 }
 
+function buildArtworkEnquiryEmailHtml({
+  enquiryId,
+  artworkId,
+  artworkTitle,
+  collectorName,
+  collectorEmail,
+  collectorPhone,
+  message,
+  collectorUid,
+}) {
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Primo Art Gallery — New Acquisition Enquiry</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #FAF8F5; color: #17202A; margin: 0; padding: 20px; }
+    .container { max-width: 580px; margin: 20px auto; background: #FFFFFF; border: 1px solid #E8E2D8; border-radius: 16px; overflow: hidden; }
+    .header { background-color: #17202A; padding: 28px; text-align: center; }
+    .brand-eyebrow { color: #D4AF37; font-size: 11px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px; }
+    .brand-title { color: #FFFFFF; font-size: 22px; font-weight: 700; margin: 0; }
+    .body { padding: 32px; }
+    .field-label { font-size: 11px; font-weight: 700; color: #8A857C; text-transform: uppercase; letter-spacing: 1px; margin-top: 16px; margin-bottom: 4px; }
+    .field-value { font-size: 15px; color: #17202A; font-weight: 500; }
+    .message-box { background-color: #FAF8F5; border-left: 3px solid #D4AF37; padding: 16px; border-radius: 6px; margin-top: 16px; font-size: 14px; line-height: 22px; white-space: pre-wrap; }
+    .footer { text-align: center; padding: 20px; font-size: 12px; color: #8A857C; border-top: 1px solid #E8E2D8; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="brand-eyebrow">Acquisition Advisory Desk</div>
+      <h1 class="brand-title">New Artwork Enquiry</h1>
+    </div>
+    <div class="body">
+      <div class="field-label">Artwork Details</div>
+      <div class="field-value"><strong>${artworkTitle}</strong> (Item ID: #${artworkId})</div>
+
+      <div class="field-label">Collector Name</div>
+      <div class="field-value">${collectorName} ${collectorUid ? '<span style="color:#D4AF37; font-size:12px;">(Verified Member)</span>' : '<span style="color:#8A857C; font-size:12px;">(Guest)</span>'}</div>
+
+      <div class="field-label">Contact Email</div>
+      <div class="field-value"><a href="mailto:${collectorEmail}">${collectorEmail}</a></div>
+
+      ${collectorPhone ? `
+      <div class="field-label">Telephone / WhatsApp</div>
+      <div class="field-value"><a href="tel:${collectorPhone}">${collectorPhone}</a></div>
+      ` : ''}
+
+      <div class="field-label">Enquiry Reference ID</div>
+      <div class="field-value" style="font-family: monospace; font-size: 13px; color: #666;">${enquiryId}</div>
+
+      <div class="field-label">Collector Message</div>
+      <div class="message-box">${message}</div>
+    </div>
+    <div class="footer">
+      Primo Art Gallery &bull; Curatorial &amp; Acquisition Desk &bull; New Delhi, India
+    </div>
+  </div>
+</body>
+</html>
+  `;
+}
+
+/**
+ * Sends Artwork Acquisition Enquiry notification email via Resend.
+ */
+async function sendArtworkEnquiryEmail(enquiryData) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const fromEmail = process.env.RESEND_FROM_EMAIL || "Primo Art Gallery <onboarding@resend.dev>";
+  const galleryEmail = process.env.GALLERY_CONTACT_EMAIL || "contact@primoartgallery.com";
+
+  if (!apiKey || apiKey.trim() === "") {
+    console.log(`[EmailService] ------------------------------------------------------------`);
+    console.log(`[EmailService] ✉️  DEV MODE ENQUIRY DISPATCH`);
+    console.log(`[EmailService]     To Gallery    : ${galleryEmail}`);
+    console.log(`[EmailService]     Artwork       : ${enquiryData.artworkTitle} (#${enquiryData.artworkId})`);
+    console.log(`[EmailService]     From Collector: ${enquiryData.collectorName} <${enquiryData.collectorEmail}>`);
+    console.log(`[EmailService] ------------------------------------------------------------`);
+    return { success: true, mode: "local_dev" };
+  }
+
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey.trim()}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: fromEmail,
+        to: [galleryEmail],
+        reply_to: enquiryData.collectorEmail,
+        subject: `[Acquisition Enquiry] ${enquiryData.artworkTitle} — ${enquiryData.collectorName}`,
+        html: buildArtworkEnquiryEmailHtml(enquiryData),
+        text: `New enquiry for "${enquiryData.artworkTitle}" (#${enquiryData.artworkId}) from ${enquiryData.collectorName} (${enquiryData.collectorEmail}, ${enquiryData.collectorPhone || "No phone"}):\n\n${enquiryData.message}`,
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      console.error("[EmailService] Resend enquiry email error:", data);
+      return { success: false, error: data.message };
+    }
+
+    console.log(`[EmailService] ✨ Enquiry Email Delivered Successfully to Gallery Desk! Message ID: ${data.id}`);
+    return { success: true, messageId: data.id };
+  } catch (err) {
+    console.error("[EmailService] Enquiry email delivery notice:", err.message);
+    return { success: false, error: err.message };
+  }
+}
+
 module.exports = {
   sendOtpEmail,
   buildLuxuryOtpEmailHtml,
+  sendArtworkEnquiryEmail,
+  buildArtworkEnquiryEmailHtml,
 };

@@ -1,21 +1,26 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+import {
+  deduplicateProducts,
+  fetchCloudWishlist,
+  flushPendingWishlistSync,
+  getWishlistStorageKey,
+  mergeGuestWishlistIntoUser,
+  syncWishlistToCloud,
+} from "@/services/collectorStorage";
 import type { WooCommerceProduct } from "@/services/woocommerce";
 import { useAuth } from "./AuthContext";
 
-export function getWishlistStorageKey(userId: string | number | null | undefined): string {
-  if (userId !== undefined && userId !== null && String(userId).trim().length > 0) {
-    return `@primo_gallery_wishlist_${String(userId).trim()}`;
-  }
-  return "@primo_gallery_wishlist_guest";
-}
+export { getWishlistStorageKey };
 
 type WishlistContextType = {
   savedProducts: WooCommerceProduct[];
   isSaved: (productId: number | string) => boolean;
   toggleWishlist: (product: WooCommerceProduct) => Promise<void>;
   removeFromWishlist: (productId: number | string) => Promise<void>;
+  syncWishlist: () => Promise<void>;
+  isSyncing: boolean;
 };
 
 const WishlistContext = createContext<WishlistContextType | undefined>(undefined);
@@ -23,6 +28,7 @@ const WishlistContext = createContext<WishlistContextType | undefined>(undefined
 export function WishlistProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const [savedProducts, setSavedProducts] = useState<WooCommerceProduct[]>([]);
+  const [isSyncing, setIsSyncing] = useState(false);
   const currentUserId = user?.id || null;
 
   // Load wishlist whenever the active user changes (or resets on logout)
@@ -30,20 +36,55 @@ export function WishlistProvider({ children }: { children: React.ReactNode }) {
     let isMounted = true;
     const storageKey = getWishlistStorageKey(currentUserId);
 
-    // Reset memory state immediately on user change
-    setSavedProducts([]);
-
+    // 1. Instant local cache load for instantaneous UI rendering
     AsyncStorage.getItem(storageKey)
-      .then((data) => {
+      .then(async (data) => {
         if (!isMounted) return;
+        let localList: WooCommerceProduct[] = [];
         if (data) {
           try {
-            setSavedProducts(JSON.parse(data));
+            localList = deduplicateProducts(JSON.parse(data));
+            setSavedProducts(localList);
           } catch {
+            localList = [];
             setSavedProducts([]);
           }
         } else {
           setSavedProducts([]);
+        }
+
+        // 2. If authenticated, merge guest items and sync with Cloud Firestore
+        if (currentUserId) {
+          setIsSyncing(true);
+          try {
+            // Merge any local guest items accumulated prior to login
+            const mergedList = await mergeGuestWishlistIntoUser(currentUserId, localList);
+            if (isMounted && mergedList.length !== localList.length) {
+              setSavedProducts(mergedList);
+              localList = mergedList;
+            }
+
+            // Fetch latest cloud state from Firestore
+            const cloudItems = await fetchCloudWishlist();
+            if (isMounted && cloudItems && cloudItems.length >= 0) {
+              // Merge cloud items with local state (deduplicated)
+              const combined = deduplicateProducts([...cloudItems, ...localList]);
+              setSavedProducts(combined);
+              await AsyncStorage.setItem(storageKey, JSON.stringify(combined));
+
+              // If local had new items not yet in cloud, sync up
+              if (combined.length > cloudItems.length) {
+                void syncWishlistToCloud(combined, currentUserId);
+              }
+            }
+
+            // Flush any pending offline sync changes
+            await flushPendingWishlistSync(currentUserId);
+          } catch (syncErr) {
+            console.warn("[WishlistContext] Cloud sync notice:", syncErr);
+          } finally {
+            if (isMounted) setIsSyncing(false);
+          }
         }
       })
       .catch(() => {
@@ -77,8 +118,16 @@ export function WishlistProvider({ children }: { children: React.ReactNode }) {
         const exists = current.some((p) => p.id === product.id);
         const updated = exists
           ? current.filter((p) => p.id !== product.id)
-          : [product, ...current];
+          : deduplicateProducts([product, ...current]);
+
+        // 1. Optimistic write to local cache
         void AsyncStorage.setItem(storageKey, JSON.stringify(updated));
+
+        // 2. Dispatch background cloud sync / offline enqueue
+        if (currentUserId) {
+          void syncWishlistToCloud(updated, currentUserId);
+        }
+
         return updated;
       });
     },
@@ -98,12 +147,37 @@ export function WishlistProvider({ children }: { children: React.ReactNode }) {
 
       setSavedProducts((current) => {
         const updated = current.filter((p) => p.id !== idNum);
+
+        // 1. Optimistic write to local cache
         void AsyncStorage.setItem(storageKey, JSON.stringify(updated));
+
+        // 2. Dispatch background cloud sync / offline enqueue
+        if (currentUserId) {
+          void syncWishlistToCloud(updated, currentUserId);
+        }
+
         return updated;
       });
     },
     [currentUserId]
   );
+
+  const syncWishlist = useCallback(async () => {
+    if (!currentUserId) return;
+    setIsSyncing(true);
+    try {
+      const cloudItems = await fetchCloudWishlist();
+      if (cloudItems) {
+        setSavedProducts(cloudItems);
+        await AsyncStorage.setItem(getWishlistStorageKey(currentUserId), JSON.stringify(cloudItems));
+      }
+      await flushPendingWishlistSync(currentUserId);
+    } catch {
+      // offline
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [currentUserId]);
 
   return (
     <WishlistContext.Provider
@@ -112,6 +186,8 @@ export function WishlistProvider({ children }: { children: React.ReactNode }) {
         isSaved,
         toggleWishlist,
         removeFromWishlist,
+        syncWishlist,
+        isSyncing,
       }}
     >
       {children}

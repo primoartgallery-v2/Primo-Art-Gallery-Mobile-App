@@ -4,14 +4,19 @@ import { Image as ExpoImage } from "expo-image";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   FlatList,
+  KeyboardAvoidingView,
   Linking,
   Modal,
+  Platform,
   Pressable,
+  ScrollView,
   Share,
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   useWindowDimensions,
   View,
 } from "react-native";
@@ -26,8 +31,11 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 
 import { GALLERY_CONFIG } from "@/constants/galleryConfig";
 import { FONTS } from "@/constants/typography";
+import { useAuth } from "@/context/AuthContext";
 import { useWishlist } from "@/context/WishlistContext";
 import { useAppTheme } from "@/hooks/useAppTheme";
+import { submitArtworkEnquiry } from "@/services/enquiryService";
+import { recordArtworkView } from "@/services/recentlyViewedStorage";
 import {
   getArtist,
   getArtistBiography,
@@ -70,6 +78,7 @@ type ArtistProfile = {
 export default function PaintingDetailScreen() {
   const router = useRouter();
   const { colors, isDark } = useAppTheme();
+  const { user } = useAuth();
   const params = useLocalSearchParams<{ id: string | string[] }>();
   const productId = Array.isArray(params.id) ? params.id[0] : params.id;
   const insets = useSafeAreaInsets();
@@ -86,7 +95,33 @@ export default function PaintingDetailScreen() {
   const [showRoomModal, setShowRoomModal] = useState(false);
   const [selectedFrame, setSelectedFrame] = useState<"gold" | "black" | "wood" | "none">("gold");
 
+  // VIP Acquisition Enquiry Form State
+  const [enquiryName, setEnquiryName] = useState("");
+  const [enquiryEmail, setEnquiryEmail] = useState("");
+  const [enquiryPhone, setEnquiryPhone] = useState("");
+  const [enquiryMessage, setEnquiryMessage] = useState(
+    "I am interested in acquiring this artwork. Please share the pricing, provenance details, and delivery terms."
+  );
+  const [isSubmittingEnquiry, setIsSubmittingEnquiry] = useState(false);
+  const [enquiryError, setEnquiryError] = useState<string | null>(null);
+  const [enquirySuccess, setEnquirySuccess] = useState(false);
+  const [enquiryRefId, setEnquiryRefId] = useState<string | null>(null);
+
+  // Pre-fill collector information when modal opens
+  useEffect(() => {
+    if (showEnquiryModal && user) {
+      if (!enquiryName) {
+        const name = `${user.first_name || ""} ${user.last_name || ""}`.trim() || user.username || "";
+        if (name) setEnquiryName(name);
+      }
+      if (!enquiryEmail && user.email) {
+        setEnquiryEmail(user.email);
+      }
+    }
+  }, [showEnquiryModal, user]);
+
   const requestId = useRef(0);
+  const recordedViewForId = useRef<number | null>(null);
 
   const loadArtwork = useCallback(async () => {
     const currentRequestId = ++requestId.current;
@@ -101,6 +136,12 @@ export default function PaintingDetailScreen() {
 
       setProduct(artwork);
       setIsLoading(false);
+
+      // Record artwork view for Recently Viewed history (deduped per load)
+      if (artwork && artwork.id && recordedViewForId.current !== artwork.id) {
+        recordedViewForId.current = artwork.id;
+        void recordArtworkView(artwork, user?.id);
+      }
 
       const artistId = getArtistId(artwork);
       if (artistId) {
@@ -169,31 +210,72 @@ export default function PaintingDetailScreen() {
     Linking.openURL(url).catch(() => {});
   };
 
-  const enquireEmail = () => {
+  const handleEnquirySubmit = async () => {
     if (!product) return;
-    try {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch {}
-    setShowEnquiryModal(false);
+    setEnquiryError(null);
 
-    const artistName =
-      artistProfile?.name ||
-      getArtworkValue(product, ARTIST_FIELD_KEYS, "Primo Art Gallery");
-    const link = product.images[0]?.src || GALLERY_CONFIG.website;
-    const subject = encodeURIComponent(`Acquisition Enquiry: ${product.name}`);
-    const body = encodeURIComponent(
-      `Hello Primo Curators,\n\nI am interested in acquiring the following artwork:\n- Artwork: ${product.name}\n- Artist: ${artistName}\n- Artwork ID: #${product.id}\n- Image/Link: ${link}\n\nPlease share price, catalogue, and purchase terms.\n\nThank you.`
-    );
-    Linking.openURL(`mailto:${GALLERY_CONFIG.email}?subject=${subject}&body=${body}`).catch(
-      () => {}
-    );
+    const cleanName = enquiryName.trim();
+    const cleanEmail = enquiryEmail.trim().toLowerCase();
+    const cleanMsg = enquiryMessage.trim();
+    const cleanPhone = enquiryPhone.trim();
+
+    if (cleanName.length < 2) {
+      setEnquiryError("Please enter your name (at least 2 characters).");
+      return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!cleanEmail || !emailRegex.test(cleanEmail)) {
+      setEnquiryError("Please enter a valid email address.");
+      return;
+    }
+
+    if (cleanMsg.length < 10) {
+      setEnquiryError("Please enter a message (at least 10 characters).");
+      return;
+    }
+
+    setIsSubmittingEnquiry(true);
+    try {
+      const res = await submitArtworkEnquiry({
+        artworkId: product.id,
+        artworkTitle: product.name,
+        collectorName: cleanName,
+        collectorEmail: cleanEmail,
+        collectorPhone: cleanPhone || undefined,
+        message: cleanMsg,
+      });
+
+      if (res.success) {
+        try {
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        } catch {}
+        setEnquirySuccess(true);
+        setEnquiryRefId(res.enquiryId || null);
+      } else {
+        try {
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        } catch {}
+        setEnquiryError(res.error || "Failed to submit enquiry. Please try again.");
+      }
+    } catch {
+      setEnquiryError("Unable to connect to gallery service. Please try again.");
+    } finally {
+      setIsSubmittingEnquiry(false);
+    }
+  };
+
+  const resetEnquiryModal = () => {
+    setShowEnquiryModal(false);
+    setEnquirySuccess(false);
+    setEnquiryRefId(null);
+    setEnquiryError(null);
   };
 
   const callAdvisory = () => {
     try {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {}
-    setShowEnquiryModal(false);
     Linking.openURL(`tel:${GALLERY_CONFIG.phoneRaw}`).catch(() => {});
   };
 
@@ -433,72 +515,283 @@ export default function PaintingDetailScreen() {
         visible={showEnquiryModal}
         transparent
         animationType="slide"
-        onRequestClose={() => setShowEnquiryModal(false)}
+        onRequestClose={resetEnquiryModal}
       >
-        <Pressable
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={styles.modalOverlay}
-          onPress={() => setShowEnquiryModal(false)}
         >
-          <Pressable
+          <Pressable style={styles.modalBackdrop} onPress={resetEnquiryModal} />
+          <View
             style={[
               styles.enquirySheet,
               { backgroundColor: colors.card, borderColor: colors.border },
             ]}
-            onPress={(e) => e.stopPropagation()}
           >
             <View style={[styles.sheetHandle, { backgroundColor: colors.border }]} />
-            <Text style={[styles.sheetEyebrow, { color: colors.gold }]}>PRIMO ART ADVISORY</Text>
-            <Text style={[styles.sheetTitle, { color: colors.text }]}>Acquisition Enquiry</Text>
-            <Text style={[styles.sheetSubtitle, { color: colors.textSecondary }]}>
-              Connect directly with our curators regarding &ldquo;{product.name}&rdquo;.
-            </Text>
 
-            <Pressable style={styles.whatsappButton} onPress={enquireWhatsApp}>
-              <Ionicons name="logo-whatsapp" size={24} color="#FFFFFF" />
-              <View style={styles.channelTextCol}>
-                <Text style={styles.whatsappTitle}>Chat on WhatsApp</Text>
-                <Text style={styles.whatsappSub}>Instant response with artwork details</Text>
+            {enquirySuccess ? (
+              /* SUCCESS STATE */
+              <View style={styles.enquirySuccessContainer}>
+                <View
+                  style={[
+                    styles.enquirySuccessBadge,
+                    { backgroundColor: colors.goldSoft, borderColor: colors.gold },
+                  ]}
+                >
+                  <Ionicons name="checkmark-circle" size={48} color={colors.gold} />
+                </View>
+
+                <Text style={[styles.enquirySuccessEyebrow, { color: colors.gold }]}>
+                  ACQUISITION DESK NOTIFIED
+                </Text>
+                <Text style={[styles.enquirySuccessTitle, { color: colors.text }]}>
+                  Enquiry Received
+                </Text>
+
+                {enquiryRefId ? (
+                  <View
+                    style={[
+                      styles.enquiryRefBox,
+                      { backgroundColor: colors.backgroundElement, borderColor: colors.border },
+                    ]}
+                  >
+                    <Text style={[styles.enquiryRefLabel, { color: colors.textSecondary }]}>
+                      REFERENCE ID
+                    </Text>
+                    <Text style={[styles.enquiryRefValue, { color: colors.gold }]}>
+                      {enquiryRefId}
+                    </Text>
+                  </View>
+                ) : null}
+
+                <Text style={[styles.enquirySuccessDescription, { color: colors.textSecondary }]}>
+                  Our senior curatorial team has received your acquisition enquiry for &ldquo;{product.name}&rdquo;.
+                  A specialist will reach out to you at <Text style={{ color: colors.text, fontFamily: FONTS.sansBold }}>{enquiryEmail}</Text> within 24 hours with valuation, provenance, and delivery terms.
+                </Text>
+
+                {/* IMMEDIATE FOLLOW-UP ACTIONS */}
+                <View style={styles.successActionsRow}>
+                  <Pressable
+                    style={styles.whatsappFollowUpBtn}
+                    onPress={enquireWhatsApp}
+                  >
+                    <Ionicons name="logo-whatsapp" size={18} color="#FFFFFF" />
+                    <Text style={styles.whatsappFollowUpText}>Chat on WhatsApp</Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={[
+                      styles.phoneFollowUpBtn,
+                      { backgroundColor: colors.backgroundElement, borderColor: colors.border },
+                    ]}
+                    onPress={callAdvisory}
+                  >
+                    <Ionicons name="call-outline" size={18} color={colors.gold} />
+                    <Text style={[styles.phoneFollowUpText, { color: colors.gold }]}>Call Advisory</Text>
+                  </Pressable>
+                </View>
+
+                <Pressable
+                  style={[
+                    styles.doneButton,
+                    { backgroundColor: colors.gold },
+                  ]}
+                  onPress={resetEnquiryModal}
+                >
+                  <Text style={styles.doneButtonText}>DONE</Text>
+                </Pressable>
               </View>
-              <Ionicons name="chevron-forward" size={18} color="#FFFFFF" />
-            </Pressable>
+            ) : (
+              /* ENQUIRY FORM */
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={styles.enquiryFormContent}
+              >
+                <View style={styles.enquiryHeader}>
+                  <View>
+                    <Text style={[styles.sheetEyebrow, { color: colors.gold }]}>
+                      PRIMO ART ADVISORY &bull; VIP ACQUISITIONS
+                    </Text>
+                    <Text style={[styles.sheetTitle, { color: colors.text }]}>
+                      Acquisition Enquiry
+                    </Text>
+                  </View>
+                  <Pressable
+                    style={[styles.closeModalCircle, { backgroundColor: colors.backgroundElement }]}
+                    onPress={resetEnquiryModal}
+                  >
+                    <Ionicons name="close" size={18} color={colors.textSecondary} />
+                  </Pressable>
+                </View>
 
-            <Pressable
-              style={[
-                styles.emailButton,
-                { backgroundColor: colors.backgroundElement, borderColor: colors.border },
-              ]}
-              onPress={enquireEmail}
-            >
-              <Ionicons name="mail-outline" size={22} color={colors.text} />
-              <View style={styles.channelTextCol}>
-                <Text style={[styles.emailTitle, { color: colors.text }]}>Official Email Enquiry</Text>
-                <Text style={[styles.emailSub, { color: colors.textSecondary }]}>Receive detailed catalogue &amp; provenance</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
-            </Pressable>
+                {/* ARTWORK PREVIEW SUMMARY */}
+                <View
+                  style={[
+                    styles.artworkSummaryCard,
+                    { backgroundColor: colors.backgroundElement, borderColor: colors.border },
+                  ]}
+                >
+                  {product.images[0]?.src ? (
+                    <ExpoImage
+                      source={{ uri: product.images[0].src }}
+                      style={styles.artworkSummaryThumb}
+                      contentFit="cover"
+                    />
+                  ) : (
+                    <View style={[styles.artworkSummaryThumb, { backgroundColor: colors.border }]} />
+                  )}
+                  <View style={styles.artworkSummaryInfo}>
+                    <Text style={[styles.artworkSummaryTitle, { color: colors.text }]} numberOfLines={1}>
+                      {product.name}
+                    </Text>
+                    <Text style={[styles.artworkSummaryArtist, { color: colors.gold }]}>
+                      {artistProfile?.name || getArtworkValue(product, ARTIST_FIELD_KEYS, "Primo Art Gallery")}
+                    </Text>
+                    <Text style={[styles.artworkSummaryId, { color: colors.textMuted }]}>
+                      Item #{product.id} &bull; {product.price ? `₹${Number(product.price).toLocaleString("en-IN")}` : "Price on Request"}
+                    </Text>
+                  </View>
+                </View>
 
-            <Pressable
-              style={[
-                styles.phoneButton,
-                { backgroundColor: colors.goldSoft, borderColor: colors.border },
-              ]}
-              onPress={callAdvisory}
-            >
-              <Ionicons name="call-outline" size={20} color={colors.gold} />
-              <Text style={[styles.phoneText, { color: colors.gold }]}>Call Art Advisory ({GALLERY_CONFIG.phone})</Text>
-            </Pressable>
+                {/* ERROR BANNER */}
+                {enquiryError ? (
+                  <View style={styles.enquiryErrorBanner}>
+                    <Ionicons name="alert-circle" size={16} color="#E74C3C" />
+                    <Text style={styles.enquiryErrorText}>{enquiryError}</Text>
+                  </View>
+                ) : null}
 
-            <Pressable
-              style={[
-                styles.cancelButton,
-                { backgroundColor: colors.card, borderColor: colors.border },
-              ]}
-              onPress={() => setShowEnquiryModal(false)}
-            >
-              <Text style={[styles.cancelButtonText, { color: colors.textSecondary }]}>Close</Text>
-            </Pressable>
-          </Pressable>
-        </Pressable>
+                {/* FORM FIELDS */}
+                <View style={styles.formGroup}>
+                  <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>
+                    YOUR FULL NAME <Text style={{ color: colors.gold }}>*</Text>
+                  </Text>
+                  <TextInput
+                    style={[
+                      styles.textInput,
+                      { backgroundColor: colors.backgroundElement, color: colors.text, borderColor: colors.border },
+                    ]}
+                    placeholder="e.g. Maharani Gayatri / Ananya Sharma"
+                    placeholderTextColor={colors.textMuted}
+                    value={enquiryName}
+                    onChangeText={setEnquiryName}
+                    autoCapitalize="words"
+                    editable={!isSubmittingEnquiry}
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>
+                    EMAIL ADDRESS <Text style={{ color: colors.gold }}>*</Text>
+                  </Text>
+                  <TextInput
+                    style={[
+                      styles.textInput,
+                      { backgroundColor: colors.backgroundElement, color: colors.text, borderColor: colors.border },
+                    ]}
+                    placeholder="collector@example.com"
+                    placeholderTextColor={colors.textMuted}
+                    value={enquiryEmail}
+                    onChangeText={setEnquiryEmail}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    editable={!isSubmittingEnquiry}
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>
+                    PHONE / WHATSAPP <Text style={{ color: colors.textMuted }}>(Optional)</Text>
+                  </Text>
+                  <TextInput
+                    style={[
+                      styles.textInput,
+                      { backgroundColor: colors.backgroundElement, color: colors.text, borderColor: colors.border },
+                    ]}
+                    placeholder="+91 98111 23456"
+                    placeholderTextColor={colors.textMuted}
+                    value={enquiryPhone}
+                    onChangeText={setEnquiryPhone}
+                    keyboardType="phone-pad"
+                    editable={!isSubmittingEnquiry}
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>
+                    ACQUISITION MESSAGE <Text style={{ color: colors.gold }}>*</Text>
+                  </Text>
+                  <TextInput
+                    style={[
+                      styles.textAreaInput,
+                      { backgroundColor: colors.backgroundElement, color: colors.text, borderColor: colors.border },
+                    ]}
+                    placeholder="Specify any questions, framing requirements, or private viewing preferences…"
+                    placeholderTextColor={colors.textMuted}
+                    value={enquiryMessage}
+                    onChangeText={setEnquiryMessage}
+                    multiline
+                    numberOfLines={3}
+                    textAlignVertical="top"
+                    editable={!isSubmittingEnquiry}
+                  />
+                </View>
+
+                {/* SUBMIT BUTTON */}
+                <Pressable
+                  style={[
+                    styles.submitEnquiryBtn,
+                    { backgroundColor: colors.gold },
+                    isSubmittingEnquiry && { opacity: 0.7 },
+                  ]}
+                  onPress={handleEnquirySubmit}
+                  disabled={isSubmittingEnquiry}
+                >
+                  {isSubmittingEnquiry ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="paper-plane-outline" size={17} color="#FFFFFF" />
+                      <Text style={styles.submitEnquiryBtnText}>
+                        SUBMIT ACQUISITION ENQUIRY
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
+
+                {/* ALTERNATE QUICK CHANNELS */}
+                <View style={styles.quickChannelsContainer}>
+                  <Text style={[styles.quickChannelsTitle, { color: colors.textMuted }]}>
+                    OR CONNECT DIRECTLY
+                  </Text>
+                  <View style={styles.quickChannelsRow}>
+                    <Pressable
+                      style={styles.quickWhatsappBtn}
+                      onPress={enquireWhatsApp}
+                    >
+                      <Ionicons name="logo-whatsapp" size={16} color="#FFFFFF" />
+                      <Text style={styles.quickWhatsappText}>WhatsApp Desk</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[
+                        styles.quickCallBtn,
+                        { backgroundColor: colors.backgroundElement, borderColor: colors.border },
+                      ]}
+                      onPress={callAdvisory}
+                    >
+                      <Ionicons name="call-outline" size={16} color={colors.gold} />
+                      <Text style={[styles.quickCallText, { color: colors.gold }]}>
+                        Call Gallery
+                      </Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </ScrollView>
+            )}
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* VIEW IN ROOM MODAL */}
@@ -1030,112 +1323,292 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.55)",
+    backgroundColor: "rgba(0,0,0,0.65)",
     justifyContent: "flex-end",
   },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
   enquirySheet: {
-    backgroundColor: "#FAF8F3",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    paddingHorizontal: 24,
-    paddingTop: 14,
-    paddingBottom: 38,
-    gap: 14,
+    borderWidth: 1,
+    maxHeight: "90%",
+    paddingBottom: 34,
   },
   sheetHandle: {
     width: 40,
     height: 4,
     borderRadius: 2,
-    backgroundColor: "#D3CEC5",
     alignSelf: "center",
-    marginBottom: 10,
+    marginTop: 10,
+    marginBottom: 6,
+  },
+  enquiryFormContent: {
+    paddingHorizontal: 22,
+    paddingTop: 8,
+    paddingBottom: 24,
+    gap: 13,
+  },
+  enquiryHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 4,
+  },
+  closeModalCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
   },
   sheetEyebrow: {
-    color: COLORS.gold,
-    fontSize: 10,
-    fontWeight: "800",
+    fontSize: 9,
+    fontFamily: FONTS.sansExtraBold,
     letterSpacing: 1.5,
+    marginBottom: 4,
   },
   sheetTitle: {
-    color: COLORS.ink,
     fontFamily: FONTS.serifBold,
-    fontSize: 26,
-    fontWeight: "700",
+    fontSize: 24,
+    lineHeight: 28,
   },
-  sheetSubtitle: {
-    color: COLORS.muted,
+  artworkSummaryCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    gap: 12,
+  },
+  artworkSummaryThumb: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+  },
+  artworkSummaryInfo: {
+    flex: 1,
+  },
+  artworkSummaryTitle: {
+    fontSize: 14,
+    fontFamily: FONTS.sansBold,
+  },
+  artworkSummaryArtist: {
+    fontSize: 12,
+    fontFamily: FONTS.sansMedium,
+    marginTop: 1,
+  },
+  artworkSummaryId: {
+    fontSize: 11,
+    fontFamily: FONTS.sansRegular,
+    marginTop: 2,
+  },
+  enquiryErrorBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    padding: 10,
+    borderRadius: 10,
+    backgroundColor: "rgba(231, 76, 60, 0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(231, 76, 60, 0.3)",
+  },
+  enquiryErrorText: {
+    flex: 1,
+    color: "#E74C3C",
+    fontSize: 12,
+    fontFamily: FONTS.sansMedium,
+  },
+  formGroup: {
+    gap: 5,
+  },
+  inputLabel: {
+    fontSize: 10,
+    fontFamily: FONTS.sansBold,
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+  },
+  textInput: {
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    fontSize: 14,
+    fontFamily: FONTS.sansRegular,
+  },
+  textAreaInput: {
+    minHeight: 76,
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingTop: 10,
     fontSize: 13,
     fontFamily: FONTS.sansRegular,
     lineHeight: 18,
-    marginBottom: 6,
   },
-  whatsappButton: {
-    backgroundColor: "#25D366",
-    padding: 16,
-    borderRadius: 18,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 14,
-  },
-  channelTextCol: {
-    flex: 1,
-  },
-  whatsappTitle: {
-    color: "#FFFFFF",
-    fontSize: 15,
-    fontFamily: FONTS.sansBold,
-  },
-  whatsappSub: {
-    color: "rgba(255,255,255,0.9)",
-    fontSize: 11,
-    fontFamily: FONTS.sansMedium,
-    marginTop: 2,
-  },
-  emailButton: {
-    backgroundColor: "#FFFFFF",
-    padding: 16,
-    borderRadius: 18,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 14,
-    borderWidth: 1,
-    borderColor: COLORS.line,
-  },
-  emailTitle: {
-    color: COLORS.ink,
-    fontSize: 15,
-    fontFamily: FONTS.sansBold,
-  },
-  emailSub: {
-    color: COLORS.muted,
-    fontSize: 11,
-    fontFamily: FONTS.sansMedium,
-    marginTop: 2,
-  },
-  phoneButton: {
-    paddingVertical: 12,
+  submitEnquiryBtn: {
+    height: 48,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
     gap: 8,
-  },
-  phoneText: {
-    color: COLORS.gold,
-    fontSize: 13,
-    fontFamily: FONTS.sansBold,
-  },
-  cancelButton: {
-    height: 44,
-    borderRadius: 22,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#EFEAE0",
     marginTop: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 3,
   },
-  cancelButtonText: {
-    color: COLORS.ink,
+  submitEnquiryBtnText: {
+    color: "#FFFFFF",
     fontSize: 12,
     fontFamily: FONTS.sansExtraBold,
+    letterSpacing: 1,
+  },
+  quickChannelsContainer: {
+    marginTop: 8,
+    alignItems: "center",
+    gap: 8,
+  },
+  quickChannelsTitle: {
+    fontSize: 9,
+    fontFamily: FONTS.sansExtraBold,
+    letterSpacing: 1.2,
+  },
+  quickChannelsRow: {
+    flexDirection: "row",
+    gap: 10,
+    width: "100%",
+  },
+  quickWhatsappBtn: {
+    flex: 1,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "#25D366",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  quickWhatsappText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontFamily: FONTS.sansBold,
+  },
+  quickCallBtn: {
+    flex: 1,
+    height: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  quickCallText: {
+    fontSize: 12,
+    fontFamily: FONTS.sansBold,
+  },
+  enquirySuccessContainer: {
+    paddingHorizontal: 24,
+    paddingVertical: 20,
+    alignItems: "center",
+    gap: 12,
+  },
+  enquirySuccessBadge: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 2,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 4,
+  },
+  enquirySuccessEyebrow: {
+    fontSize: 10,
+    fontFamily: FONTS.sansExtraBold,
+    letterSpacing: 1.5,
+  },
+  enquirySuccessTitle: {
+    fontSize: 22,
+    fontFamily: FONTS.serifBold,
+    textAlign: "center",
+  },
+  enquiryRefBox: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: "center",
+    gap: 2,
+  },
+  enquiryRefLabel: {
+    fontSize: 9,
+    fontFamily: FONTS.sansBold,
+    letterSpacing: 1,
+  },
+  enquiryRefValue: {
+    fontSize: 13,
+    fontFamily: "monospace",
+    fontWeight: "700",
+  },
+  enquirySuccessDescription: {
+    fontSize: 13,
+    fontFamily: FONTS.sansRegular,
+    lineHeight: 20,
+    textAlign: "center",
+    paddingHorizontal: 10,
+  },
+  successActionsRow: {
+    flexDirection: "row",
+    gap: 10,
+    width: "100%",
+    marginTop: 6,
+  },
+  whatsappFollowUpBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: "#25D366",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  whatsappFollowUpText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontFamily: FONTS.sansBold,
+  },
+  phoneFollowUpBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  phoneFollowUpText: {
+    fontSize: 12,
+    fontFamily: FONTS.sansBold,
+  },
+  doneButton: {
+    width: "100%",
+    height: 46,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 6,
+  },
+  doneButtonText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontFamily: FONTS.sansExtraBold,
+    letterSpacing: 1,
   },
   roomModalContainer: {
     flex: 1,

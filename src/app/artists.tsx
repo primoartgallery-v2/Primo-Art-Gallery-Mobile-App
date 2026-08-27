@@ -19,7 +19,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { AppBottomNav } from "@/components/app-bottom-nav";
 import { FONTS } from "@/constants/typography";
+import { useAuth } from "@/context/AuthContext";
 import { useAppTheme } from "@/hooks/useAppTheme";
+import {
+  getLocalSavedArtists,
+  getCloudSavedArtists,
+  toggleSavedArtist,
+} from "@/services/savedArtistsStorage";
 import {
   extractProductArtistIds,
   getArtistsList,
@@ -30,7 +36,10 @@ import {
 export default function ArtistsScreen() {
   const router = useRouter();
   const { colors, isDark } = useAppTheme();
+  const { user } = useAuth();
   const [artists, setArtists] = useState<ArtistItem[]>([]);
+  const [savedArtistIds, setSavedArtistIds] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<"all" | "saved">("all");
   const [artistArtworksCount, setArtistArtworksCount] = useState<
     Record<string, number>
   >({});
@@ -76,17 +85,50 @@ export default function ArtistsScreen() {
 
   useEffect(() => {
     loadArtists();
-  }, [loadArtists]);
+
+    // Load saved artists for active user (or guest)
+    getLocalSavedArtists(user?.id)
+      .then((ids) => {
+        setSavedArtistIds(ids);
+        if (user?.id) {
+          getCloudSavedArtists()
+            .then((cloudIds) => {
+              if (cloudIds) setSavedArtistIds(cloudIds);
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }, [loadArtists, user?.id]);
+
+  const handleToggleSaveArtist = useCallback(
+    async (artistId: string | number) => {
+      try {
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      } catch {}
+
+      const { savedIds } = await toggleSavedArtist(artistId, user?.id);
+      setSavedArtistIds(savedIds);
+    },
+    [user?.id]
+  );
 
   const filteredArtists = useMemo(() => {
-    if (!searchQuery.trim()) return artists;
+    let list = artists;
+
+    // Apply Saved tab filter
+    if (activeTab === "saved") {
+      list = list.filter((a) => savedArtistIds.includes(String(a.id)));
+    }
+
+    if (!searchQuery.trim()) return list;
     const q = searchQuery.toLowerCase().trim();
-    return artists.filter(
+    return list.filter(
       (a) =>
         a.name.toLowerCase().includes(q) ||
         (a.category && a.category.toLowerCase().includes(q))
     );
-  }, [artists, searchQuery]);
+  }, [artists, savedArtistIds, activeTab, searchQuery]);
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: colors.background }]}>
@@ -129,6 +171,63 @@ export default function ArtistsScreen() {
         </Pressable>
       </View>
 
+      {/* TABS: ALL ARTISTS / SAVED ARTISTS */}
+      <View style={styles.tabBar}>
+        <Pressable
+          style={[
+            styles.tabButton,
+            activeTab === "all"
+              ? [styles.activeTabButton, { backgroundColor: colors.gold }]
+              : { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+          onPress={() => {
+            try {
+              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            } catch {}
+            setActiveTab("all");
+          }}
+        >
+          <Text
+            style={[
+              styles.tabButtonText,
+              { color: activeTab === "all" ? "#FFFFFF" : colors.textSecondary },
+            ]}
+          >
+            ALL ARTISTS ({artists.length})
+          </Text>
+        </Pressable>
+
+        <Pressable
+          style={[
+            styles.tabButton,
+            activeTab === "saved"
+              ? [styles.activeTabButton, { backgroundColor: colors.gold }]
+              : { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+          onPress={() => {
+            try {
+              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            } catch {}
+            setActiveTab("saved");
+          }}
+        >
+          <Ionicons
+            name={activeTab === "saved" ? "bookmark" : "bookmark-outline"}
+            size={13}
+            color={activeTab === "saved" ? "#FFFFFF" : colors.gold}
+            style={{ marginRight: 4 }}
+          />
+          <Text
+            style={[
+              styles.tabButtonText,
+              { color: activeTab === "saved" ? "#FFFFFF" : colors.textSecondary },
+            ]}
+          >
+            SAVED ({savedArtistIds.length})
+          </Text>
+        </Pressable>
+      </View>
+
       {/* SEARCH BAR */}
       <View style={styles.searchRow}>
         <View
@@ -140,7 +239,11 @@ export default function ArtistsScreen() {
           <Ionicons name="search-outline" size={18} color={colors.gold} />
           <TextInput
             style={[styles.searchInput, { color: colors.text }]}
-            placeholder="Search artists by name or style…"
+            placeholder={
+              activeTab === "saved"
+                ? "Search saved artists…"
+                : "Search artists by name or style…"
+            }
             placeholderTextColor={colors.textMuted}
             value={searchQuery}
             onChangeText={setSearchQuery}
@@ -159,7 +262,8 @@ export default function ArtistsScreen() {
       <View style={styles.countRow}>
         <Text style={[styles.countText, { color: colors.textSecondary }]}>
           {filteredArtists.length}{" "}
-          {filteredArtists.length === 1 ? "Curated Artist" : "Curated Artists"}
+          {filteredArtists.length === 1 ? "Artist" : "Artists"}
+          {activeTab === "saved" ? " in your private collection" : " in gallery roster"}
         </Text>
       </View>
 
@@ -201,6 +305,8 @@ export default function ArtistsScreen() {
             <ArtistCard
               artist={item}
               artworksCount={artistArtworksCount[String(item.id)]}
+              isSaved={savedArtistIds.includes(String(item.id))}
+              onToggleSave={() => handleToggleSaveArtist(item.id)}
               onPress={() => {
                 try {
                   void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -216,13 +322,31 @@ export default function ArtistsScreen() {
             />
           )}
           ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Ionicons name="people-outline" size={38} color={colors.gold} />
-              <Text style={[styles.emptyTitle, { color: colors.text }]}>No Artists Found</Text>
-              <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-                No artists matched &ldquo;{searchQuery}&rdquo;.
-              </Text>
-            </View>
+            activeTab === "saved" && !searchQuery.trim() ? (
+              <View style={styles.emptyState}>
+                <Ionicons name="bookmark-outline" size={38} color={colors.gold} />
+                <Text style={[styles.emptyTitle, { color: colors.text }]}>No Saved Artists Yet</Text>
+                <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                  Bookmark your favorite master artists to easily discover their original artworks.
+                </Text>
+                <Pressable
+                  style={[styles.exploreBtn, { backgroundColor: colors.gold }]}
+                  onPress={() => setActiveTab("all")}
+                >
+                  <Text style={styles.exploreBtnText}>EXPLORE ALL ARTISTS</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <View style={styles.emptyState}>
+                <Ionicons name="people-outline" size={38} color={colors.gold} />
+                <Text style={[styles.emptyTitle, { color: colors.text }]}>No Artists Found</Text>
+                <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                  {searchQuery
+                    ? `No artists matched "${searchQuery}".`
+                    : "No artists available at this time."}
+                </Text>
+              </View>
+            )
           }
         />
       )}
@@ -235,10 +359,14 @@ export default function ArtistsScreen() {
 const ArtistCard = React.memo(function ArtistCard({
   artist,
   artworksCount,
+  isSaved,
+  onToggleSave,
   onPress,
 }: {
   artist: ArtistItem;
   artworksCount?: number;
+  isSaved?: boolean;
+  onToggleSave?: () => void;
   onPress: () => void;
 }) {
   const { colors, isDark } = useAppTheme();
@@ -272,6 +400,34 @@ const ArtistCard = React.memo(function ArtistCard({
         ) : (
           <Ionicons name="person" size={36} color={colors.gold} />
         )}
+
+        {/* SAVE / BOOKMARK BUTTON */}
+        {onToggleSave ? (
+          <Pressable
+            style={[
+              styles.saveArtistBtn,
+              {
+                backgroundColor: isSaved
+                  ? colors.gold
+                  : isDark
+                  ? "rgba(23, 24, 33, 0.85)"
+                  : "rgba(255, 255, 255, 0.9)",
+                borderColor: isSaved ? colors.gold : colors.border,
+              },
+            ]}
+            onPress={(e) => {
+              e.stopPropagation();
+              onToggleSave();
+            }}
+            accessibilityLabel={isSaved ? "Unsave artist" : "Save artist"}
+          >
+            <Ionicons
+              name={isSaved ? "bookmark" : "bookmark-outline"}
+              size={14}
+              color={isSaved ? "#FFFFFF" : colors.gold}
+            />
+          </Pressable>
+        ) : null}
       </View>
 
       <Text style={styles.artistName} numberOfLines={1}>
@@ -517,5 +673,54 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: FONTS.sansRegular,
     textAlign: "center",
+  },
+  tabBar: {
+    flexDirection: "row",
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 4,
+    gap: 10,
+  },
+  tabButton: {
+    flex: 1,
+    height: 38,
+    borderRadius: 19,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+  },
+  activeTabButton: {
+    borderColor: "transparent",
+  },
+  tabButtonText: {
+    fontSize: 11,
+    fontFamily: FONTS.sansExtraBold,
+    letterSpacing: 0.8,
+  },
+  saveArtistBtn: {
+    position: "absolute",
+    top: 4,
+    right: 4,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+  },
+  exploreBtn: {
+    marginTop: 18,
+    paddingHorizontal: 20,
+    height: 42,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  exploreBtnText: {
+    color: "#FFFFFF",
+    fontSize: 11,
+    fontFamily: FONTS.sansExtraBold,
+    letterSpacing: 1,
   },
 });

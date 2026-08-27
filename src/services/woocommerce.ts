@@ -54,6 +54,17 @@ export type WooCommerceProduct = {
   stock_quantity: number | null;
 };
 
+export type WooCommerceCategory = {
+  id: number;
+  name: string;
+  slug: string;
+  parent?: number;
+  description?: string;
+  display?: string;
+  image?: { id: number; src: string; alt?: string } | null;
+  count?: number;
+};
+
 export type ProductPage = {
   products: WooCommerceProduct[];
   page: number;
@@ -74,10 +85,15 @@ export type ArtistItem = {
   artworksCount?: number;
 };
 
-type GetProductsOptions = {
+export type GetProductsOptions = {
   page?: number;
   perPage?: number;
-  category?: number;
+  category?: number | string;
+  search?: string;
+  minPrice?: number | string;
+  maxPrice?: number | string;
+  orderby?: "date" | "id" | "include" | "title" | "slug" | "price" | "popularity" | "rating" | string;
+  order?: "asc" | "desc" | string;
   exclude?: number[];
   forceRefresh?: boolean;
 };
@@ -97,12 +113,14 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const productsCache = new Map<string, { data: ProductPage; timestamp: number }>();
 const productDetailCache = new Map<string, { data: WooCommerceProduct; timestamp: number }>();
 const artistCache = new Map<string, { data: WordPressArtist; timestamp: number }>();
+let categoriesCache: { data: WooCommerceCategory[]; timestamp: number } | null = null;
 let artistsListCache: { data: ArtistItem[]; timestamp: number } | null = null;
 
 export function clearWooCommerceCache() {
   productsCache.clear();
   productDetailCache.clear();
   artistCache.clear();
+  categoriesCache = null;
   artistsListCache = null;
 }
 
@@ -110,6 +128,11 @@ function createProductsUrl({
   page = 1,
   perPage = DEFAULT_PER_PAGE,
   category,
+  search,
+  minPrice,
+  maxPrice,
+  orderby,
+  order,
   exclude,
 }: GetProductsOptions) {
   const query = [
@@ -117,8 +140,23 @@ function createProductsUrl({
     `per_page=${perPage}`,
   ];
 
-  if (category) {
-    query.push(`category=${category}`);
+  if (category !== undefined && category !== null && String(category).trim().length > 0) {
+    query.push(`category=${encodeURIComponent(String(category).trim())}`);
+  }
+  if (search !== undefined && search !== null && String(search).trim().length > 0) {
+    query.push(`search=${encodeURIComponent(String(search).trim())}`);
+  }
+  if (minPrice !== undefined && minPrice !== null && String(minPrice).trim().length > 0) {
+    query.push(`min_price=${encodeURIComponent(String(minPrice).trim())}`);
+  }
+  if (maxPrice !== undefined && maxPrice !== null && String(maxPrice).trim().length > 0) {
+    query.push(`max_price=${encodeURIComponent(String(maxPrice).trim())}`);
+  }
+  if (orderby && String(orderby).trim().length > 0) {
+    query.push(`orderby=${encodeURIComponent(String(orderby).trim().toLowerCase())}`);
+  }
+  if (order && String(order).trim().length > 0) {
+    query.push(`order=${encodeURIComponent(String(order).trim().toLowerCase())}`);
   }
   if (exclude?.length) {
     query.push(`exclude=${exclude.join(",")}`);
@@ -130,7 +168,7 @@ function createProductsUrl({
 export async function getProducts(
   options: GetProductsOptions = {}
 ): Promise<ProductPage> {
-  const cacheKey = `${options.page ?? 1}_${options.perPage ?? DEFAULT_PER_PAGE}_${options.category ?? ""}_${(options.exclude ?? []).join(",")}`;
+  const cacheKey = `${options.page ?? 1}_${options.perPage ?? DEFAULT_PER_PAGE}_${options.category ?? ""}_${options.search ?? ""}_${options.minPrice ?? ""}_${options.maxPrice ?? ""}_${options.orderby ?? ""}_${options.order ?? ""}_${(options.exclude ?? []).join(",")}`;
   const cached = productsCache.get(cacheKey);
 
   if (!options.forceRefresh && cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
@@ -430,4 +468,45 @@ export function extractProductArtistIds(product: WooCommerceProduct): string[] {
   });
 
   return Array.from(new Set(ids));
+}
+
+/**
+ * Fetches real categories from the secure Render proxy /api/categories.
+ */
+export async function getCategories(forceRefresh = false): Promise<WooCommerceCategory[]> {
+  if (!forceRefresh && categoriesCache && Date.now() - categoriesCache.timestamp < CACHE_TTL_MS) {
+    return categoriesCache.data;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const url = `${API_BASE}/api/categories`;
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+      },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      if (categoriesCache) return categoriesCache.data;
+      throw new WooCommerceError("Unable to load categories.", response.status);
+    }
+
+    const data = (await response.json()) as WooCommerceCategory[];
+    const valid = Array.isArray(data)
+      ? data.filter((c) => c && c.id && c.name && c.slug !== "uncategorized")
+      : [];
+    categoriesCache = { data: valid, timestamp: Date.now() };
+    return valid;
+  } catch (error) {
+    if (categoriesCache) return categoriesCache.data;
+    console.error("[Primo API Categories Error]:", error);
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
 }
