@@ -19,6 +19,10 @@ class PersistentAuthStore {
     this._ensureStorage();
   }
 
+  get useFirestore() {
+    return Boolean(this.firestore);
+  }
+
   setFirestore(db) {
     this.firestore = db;
     console.log("[PersistentAuthStore] Firestore backend configured.");
