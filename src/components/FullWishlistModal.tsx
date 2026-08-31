@@ -200,7 +200,7 @@ export function FullWishlistModal({ visible, onClose }: FullWishlistModalProps) 
 
                   <View style={styles.cardBody}>
                     <Text
-                      style={[styles.cardTitle, { color: colors.text }]}
+                      style={[styles.cardTitle, { color: isDark ? colors.gold : colors.text }]}
                       numberOfLines={1}
                     >
                       {item.name}

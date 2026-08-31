@@ -244,7 +244,7 @@ export function CertificateOfAuthenticityModal({
               <View style={[styles.specsTable, { backgroundColor: colors.backgroundElement, borderColor: colors.borderLight }]}>
                 <View style={styles.specRow}>
                   <Text style={[styles.specLabel, { color: colors.textSecondary }]}>Artwork Title</Text>
-                  <Text style={[styles.specValueBold, { color: colors.text }]}>{coa.artworkTitle}</Text>
+                  <Text style={[styles.specValueBold, { color: isDark ? colors.gold : colors.text }]}>{coa.artworkTitle}</Text>
                 </View>
 
                 <View style={[styles.specDivider, { backgroundColor: colors.borderLight }]} />

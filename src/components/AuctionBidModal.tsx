@@ -321,7 +321,7 @@ export function AuctionBidModal({
                   >
                     <View style={styles.tableRow}>
                       <Text style={[styles.tableLabel, { color: colors.textSecondary }]}>Artwork Lot</Text>
-                      <Text style={[styles.tableValue, { color: colors.text }]}>{confirmedBid.lotTitle}</Text>
+                      <Text style={[styles.tableValue, { color: isDark ? colors.gold : colors.text }]}>{confirmedBid.lotTitle}</Text>
                     </View>
                     <View style={[styles.tableDivider, { backgroundColor: colors.borderLight }]} />
                     <View style={styles.tableRow}>
@@ -378,7 +378,7 @@ export function AuctionBidModal({
 
                     <View style={styles.lotSummaryInfo}>
                       <Text style={[styles.lotBadgeText, { color: colors.gold }]}>{lot.lotNumber}</Text>
-                      <Text style={[styles.lotTitleText, { color: colors.text }]} numberOfLines={2}>
+                      <Text style={[styles.lotTitleText, { color: isDark ? colors.gold : colors.text }]} numberOfLines={2}>
                         {lot.title}
                       </Text>
                       <Text style={[styles.lotArtistText, { color: colors.textSecondary }]}>

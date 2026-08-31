@@ -378,7 +378,7 @@ export default function HomeScreen() {
                           </View>
                         )}
                         <View style={styles.resultCopy}>
-                          <Text style={[styles.resultTitle, { color: colors.text }]} numberOfLines={1}>
+                          <Text style={[styles.resultTitle, { color: isDark ? colors.gold : colors.text }]} numberOfLines={1}>
                             {item.name}
                           </Text>
                           <Text style={[styles.resultSubtitle, { color: colors.textSecondary }]} numberOfLines={1}>
@@ -612,7 +612,7 @@ export default function HomeScreen() {
                       <Ionicons name="image-outline" size={24} color={colors.gold} />
                     )}
                   </View>
-                  <Text style={[styles.recentName, { color: colors.text }]} numberOfLines={1}>
+                  <Text style={[styles.recentName, { color: isDark ? colors.gold : colors.text }]} numberOfLines={1}>
                     {item.name}
                   </Text>
                   <Text style={[styles.recentPrice, { color: colors.gold }]}>
@@ -846,7 +846,7 @@ const ProductCard = React.memo(function ProductCard({
         </Pressable>
       </View>
 
-      <Text numberOfLines={2} style={[styles.productName, { color: colors.text }]}>
+      <Text numberOfLines={2} style={[styles.productName, { color: isDark ? colors.gold : colors.text }]}>
         {product.name}
       </Text>
 

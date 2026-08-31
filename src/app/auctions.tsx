@@ -269,7 +269,7 @@ export default function AuctionsScreen() {
                     <Text style={[styles.lotArtist, { color: colors.textSecondary }]} numberOfLines={1}>
                       {lot.artist}
                     </Text>
-                    <Text style={[styles.lotTitle, { color: colors.text }]} numberOfLines={1}>
+                    <Text style={[styles.lotTitle, { color: isDark ? colors.gold : colors.text }]} numberOfLines={1}>
                       {lot.title}
                     </Text>
 

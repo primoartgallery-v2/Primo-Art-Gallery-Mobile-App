@@ -1020,7 +1020,7 @@ const ArtworkGridCard = React.memo(function ArtworkGridCard({
         </Pressable>
       </View>
 
-      <Text style={[styles.productName, { color: colors.text }]} numberOfLines={2}>
+      <Text style={[styles.productName, { color: isDark ? colors.gold : colors.text }]} numberOfLines={2}>
         {product.name}
       </Text>
       <Text style={[styles.productMeta, { color: colors.textSecondary }]}>

@@ -377,7 +377,7 @@ export default function PaintingDetailScreen() {
               <Text style={[styles.eyebrow, { color: colors.gold }]}>
                 {product.categories[0]?.name ?? "ORIGINAL ARTWORK"}
               </Text>
-              <Text style={[styles.title, { color: colors.text }]}>{product.name}</Text>
+              <Text style={[styles.title, { color: isDark ? colors.gold : colors.text }]}>{product.name}</Text>
               <Text style={[styles.artist, { color: colors.textSecondary }]}>by {artist}</Text>
 
               <View
@@ -654,7 +654,7 @@ export default function PaintingDetailScreen() {
                     <View style={[styles.artworkSummaryThumb, { backgroundColor: colors.border }]} />
                   )}
                   <View style={styles.artworkSummaryInfo}>
-                    <Text style={[styles.artworkSummaryTitle, { color: colors.text }]} numberOfLines={1}>
+                    <Text style={[styles.artworkSummaryTitle, { color: isDark ? colors.gold : colors.text }]} numberOfLines={1}>
                       {product.name}
                     </Text>
                     <Text style={[styles.artworkSummaryArtist, { color: colors.gold }]}>
@@ -1057,7 +1057,7 @@ const RelatedPaintingCard = React.memo(function RelatedPaintingCard({
           <Ionicons name="image-outline" size={25} color={colors.gold} />
         </View>
       )}
-      <Text style={[styles.relatedName, { color: colors.text }]} numberOfLines={2}>{product.name}</Text>
+      <Text style={[styles.relatedName, { color: isDark ? colors.gold : colors.text }]} numberOfLines={2}>{product.name}</Text>
       <Text style={[styles.relatedPrice, { color: colors.gold }]}>{price ? `₹ ${price}` : "Price on request"}</Text>
     </Pressable>
   );
