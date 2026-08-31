@@ -1,9 +1,104 @@
-const API_BASE = (
-  process.env.EXPO_PUBLIC_API_URL ||
-  "https://primo-art-gallery-mobile-app.onrender.com"
-).replace(/\/$/, "");
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
+import { API_BASE_URL as API_BASE } from "@/constants/apiConfig";
 
 const DEFAULT_PER_PAGE = 10;
+
+export const STORAGE_KEY_CATALOGUE_V1 = "@primo_cached_catalogue_v1";
+export const STORAGE_KEY_ARTISTS_V1 = "@primo_cached_artists_v1";
+
+/**
+ * Retrieves persisted primary catalogue data from AsyncStorage for instant cold-start rendering.
+ */
+export async function getPersistentPrimaryProducts(): Promise<ProductPage | null> {
+  try {
+    const raw = await AsyncStorage.getItem(STORAGE_KEY_CATALOGUE_V1);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && Array.isArray(parsed.products) && parsed.products.length > 0) {
+      return parsed as ProductPage;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persists primary catalogue data to AsyncStorage for offline/fast load.
+ */
+export async function savePersistentPrimaryProducts(data: ProductPage): Promise<void> {
+  try {
+    if (data && Array.isArray(data.products) && data.products.length > 0) {
+      await AsyncStorage.setItem(STORAGE_KEY_CATALOGUE_V1, JSON.stringify(data));
+    }
+  } catch {}
+}
+
+/**
+ * Retrieves persisted artists list from AsyncStorage.
+ */
+export async function getPersistentArtistsList(): Promise<ArtistItem[] | null> {
+  try {
+    const raw = await AsyncStorage.getItem(STORAGE_KEY_ARTISTS_V1);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed as ArtistItem[];
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persists artists list to AsyncStorage.
+ */
+export async function savePersistentArtistsList(data: ArtistItem[]): Promise<void> {
+  try {
+    if (Array.isArray(data) && data.length > 0) {
+      await AsyncStorage.setItem(STORAGE_KEY_ARTISTS_V1, JSON.stringify(data));
+    }
+  } catch {}
+}
+
+/**
+ * Executes a network fetch with exactly one automatic retry after ~800ms delay on transient failures.
+ */
+async function fetchWithSingleRetry(
+  url: string,
+  headers: Record<string, string> = { Accept: "application/json" },
+  timeoutMs = 20_000
+): Promise<Response> {
+  const doFetch = async (): Promise<Response> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, {
+        method: "GET",
+        headers,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  try {
+    const res = await doFetch();
+    // If upstream server error (502, 503, 504), retry once after 800ms
+    if (!res.ok && res.status >= 500) {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      return await doFetch();
+    }
+    return res;
+  } catch (err) {
+    // On transient network or abort failure, wait 800ms and retry once
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    return await doFetch();
+  }
+}
 
 export type WooCommerceProductImage = {
   id: number;
@@ -175,20 +270,15 @@ export async function getProducts(
     return cached.data;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20_000);
-
   const url = createProductsUrl(options);
   console.log("[Primo API] Fetching artworks from proxy:", url);
 
   try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-      },
-      signal: controller.signal,
-    });
+    const response = await fetchWithSingleRetry(
+      url,
+      { Accept: "application/json" },
+      20_000
+    );
 
     if (!response.ok) {
       console.warn("[Primo API] Non-200 response:", response.status);
@@ -209,12 +299,40 @@ export async function getProducts(
     };
 
     productsCache.set(cacheKey, { data: result, timestamp: Date.now() });
+
+    // Save primary catalogue page to persistent storage for instant offline/cold load
+    if (
+      (options.page ?? 1) === 1 &&
+      !options.category &&
+      !options.search &&
+      !options.minPrice &&
+      !options.maxPrice &&
+      !options.exclude?.length
+    ) {
+      void savePersistentPrimaryProducts(result);
+    }
+
     return result;
   } catch (error) {
     console.error("[Primo API Error]:", error);
 
     if (cached) {
       return cached.data;
+    }
+
+    // Try reading persistent storage on primary query failure
+    if (
+      (options.page ?? 1) === 1 &&
+      !options.category &&
+      !options.search &&
+      !options.minPrice &&
+      !options.maxPrice &&
+      !options.exclude?.length
+    ) {
+      const persistent = await getPersistentPrimaryProducts();
+      if (persistent && persistent.products && persistent.products.length > 0) {
+        return persistent;
+      }
     }
 
     if (error instanceof WooCommerceError) {
@@ -230,8 +348,6 @@ export async function getProducts(
     throw new WooCommerceError(
       "Unable to connect to Primo Art Gallery. Please try again."
     );
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -250,18 +366,14 @@ export async function getProduct(
     return cached.data;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20_000);
   const url = `${API_BASE}/api/products/${productId}`;
 
   try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-      },
-      signal: controller.signal,
-    });
+    const response = await fetchWithSingleRetry(
+      url,
+      { Accept: "application/json" },
+      20_000
+    );
 
     if (!response.ok) {
       throw new WooCommerceError(
@@ -293,8 +405,6 @@ export async function getProduct(
     throw new WooCommerceError(
       "Unable to connect to Primo Art Gallery. Please try again."
     );
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -304,15 +414,13 @@ export async function getArtistsList(forceRefresh = false): Promise<ArtistItem[]
   }
 
   const url = `${API_BASE}/api/artists`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20_000);
 
   try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      signal: controller.signal,
-    });
+    const response = await fetchWithSingleRetry(
+      url,
+      { Accept: "application/json" },
+      20_000
+    );
 
     if (!response.ok) {
       throw new WooCommerceError("Unable to load artists list.", response.status);
@@ -320,12 +428,13 @@ export async function getArtistsList(forceRefresh = false): Promise<ArtistItem[]
 
     const parsed = (await response.json()) as ArtistItem[];
     artistsListCache = { data: parsed, timestamp: Date.now() };
+    void savePersistentArtistsList(parsed);
     return parsed;
   } catch (error) {
     if (artistsListCache) return artistsListCache.data;
+    const persistent = await getPersistentArtistsList();
+    if (persistent && persistent.length > 0) return persistent;
     throw new WooCommerceError("Unable to load gallery artists.");
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -510,3 +619,59 @@ export async function getCategories(forceRefresh = false): Promise<WooCommerceCa
     clearTimeout(timeout);
   }
 }
+
+export type ArtworkCoA = {
+  referenceId: string;
+  artworkId: number;
+  artworkTitle: string;
+  artistName: string;
+  medium: string;
+  dimensions: string;
+  creationYear: string;
+  edition: string;
+  signatureStatus: string;
+  gallery: string;
+  curator: string;
+  issuedAt: string;
+  integrityHash: string;
+  cryptographicSignature: string;
+  verificationMechanism: string;
+  verificationUrl: string;
+  legalNotice: string;
+  imageUrl?: string | null;
+};
+
+/**
+ * Fetches authoritative Certificate of Authenticity (CoA) metadata from the secure backend proxy.
+ */
+export async function getArtworkCoA(productId: number | string): Promise<ArtworkCoA | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const url = `${API_BASE}/api/products/${productId}/coa`;
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+      },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    if (data.success && data.coa) {
+      return data.coa as ArtworkCoA;
+    }
+    return null;
+  } catch (error) {
+    console.warn("[Primo API CoA Error]:", error);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+

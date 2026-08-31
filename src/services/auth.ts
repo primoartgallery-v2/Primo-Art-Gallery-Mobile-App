@@ -1,8 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getFirebaseAuth, getFirebaseAuthModule } from "./firebase";
-import { setAuthToken } from "./collectorStorage";
+import { getAuthToken, setAuthToken } from "./collectorStorage";
 import { mergeGuestRecentlyViewed } from "./recentlyViewedStorage";
 import { mergeGuestSavedArtists } from "./savedArtistsStorage";
+import { syncGuestAddressesToCloud, syncPendingAddressesToCloud } from "./address";
 
 // Storage keys
 export const AUTH_USER_KEY = "@primo_auth_user";
@@ -13,9 +14,7 @@ export const LEGACY_UNCLAIMED_BACKUP_KEY = "@primo_legacy_unclaimed_backup";
 export const LEGACY_WISHLIST_GLOBAL_KEY = "@primo_gallery_wishlist_v1";
 export const LEGACY_ADDRESSES_GLOBAL_KEY = "@primo_user_addresses";
 
-// Server base URL normalized (strips trailing /api or /)
-const RAW_API_URL = process.env.EXPO_PUBLIC_API_URL || "http://192.168.0.129:4000";
-const API_BASE_URL = RAW_API_URL.replace(/\/api\/?$/, "").replace(/\/+$/, "");
+import { API_BASE_URL } from "@/constants/apiConfig";
 
 export type PrimoCollectorUser = {
   id: string | number;
@@ -195,6 +194,8 @@ export async function verifyEmailOtp(
   await checkAndMigrateLegacyData(user.id, user.email);
   void mergeGuestRecentlyViewed(user.id);
   void mergeGuestSavedArtists(user.id);
+  void syncGuestAddressesToCloud(user.id);
+  void syncPendingAddressesToCloud(user.id);
 
   return user;
 }
@@ -275,6 +276,8 @@ export async function loginWithEmailPassword(
   await checkAndMigrateLegacyData(user.id, user.email);
   void mergeGuestRecentlyViewed(user.id);
   void mergeGuestSavedArtists(user.id);
+  void syncGuestAddressesToCloud(user.id);
+  void syncPendingAddressesToCloud(user.id);
 
   return user;
 }
@@ -362,6 +365,8 @@ export async function resetPasswordWithOtp(
   await checkAndMigrateLegacyData(user.id, user.email);
   void mergeGuestRecentlyViewed(user.id);
   void mergeGuestSavedArtists(user.id);
+  void syncGuestAddressesToCloud(user.id);
+  void syncPendingAddressesToCloud(user.id);
 
   return user;
 }
@@ -406,6 +411,8 @@ export async function signInWithGoogle(
   await checkAndMigrateLegacyData(user.id, user.email);
   void mergeGuestRecentlyViewed(user.id);
   void mergeGuestSavedArtists(user.id);
+  void syncGuestAddressesToCloud(user.id);
+  void syncPendingAddressesToCloud(user.id);
 
   return user;
 }
@@ -424,7 +431,7 @@ export async function getStoredUser(): Promise<PrimoCollectorUser | null> {
 }
 
 /**
- * Updates profile details (Name, Phone, Avatar) and persists them.
+ * Updates profile details (Name, Phone, Avatar) and persists them locally and in Cloud Firestore.
  */
 export async function updateStoredUserProfile(
   params: UpdateProfileParams
@@ -450,7 +457,68 @@ export async function updateStoredUserProfile(
   };
 
   await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(updated));
+
+  // Sync profile customizations to Cloud Firestore in background
+  void syncProfileToCloud({
+    firstName: updated.first_name,
+    lastName: updated.last_name,
+    email: updated.email,
+    phone: updated.billing?.phone || "",
+    avatarUrl: updated.avatar_url || "avatar_1",
+  });
+
   return updated;
+}
+
+/**
+ * Fetches collector profile customizations from Cloud Firestore.
+ */
+export async function getCloudProfile(): Promise<UpdateProfileParams | null> {
+  const token = await getAuthToken();
+  if (!token) return null;
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/collector/profile`, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.success && data.profile) {
+      return data.profile;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persists collector profile customizations to Cloud Firestore.
+ */
+export async function syncProfileToCloud(profile: UpdateProfileParams): Promise<boolean> {
+  const token = await getAuthToken();
+  if (!token) return false;
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/collector/profile`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ profile }),
+    });
+
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 /**

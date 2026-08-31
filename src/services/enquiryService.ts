@@ -17,8 +17,7 @@ export type ArtworkEnquiryResult = {
   rateLimited?: boolean;
 };
 
-const RAW_API_URL = process.env.EXPO_PUBLIC_API_URL || "http://192.168.0.129:4000";
-const API_BASE_URL = RAW_API_URL.replace(/\/api\/?$/, "").replace(/\/+$/, "");
+import { API_BASE_URL } from "@/constants/apiConfig";
 
 /**
  * Submits an artwork acquisition enquiry to the Render backend proxy.

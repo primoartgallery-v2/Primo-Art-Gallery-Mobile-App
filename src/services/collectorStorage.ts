@@ -6,8 +6,7 @@ export const PENDING_WISHLIST_SYNC_PREFIX = "@primo_pending_wishlist_sync_";
 export const WISHLIST_STORAGE_PREFIX = "@primo_gallery_wishlist_";
 export const GUEST_WISHLIST_KEY = "@primo_gallery_wishlist_guest";
 
-const RAW_API_URL = process.env.EXPO_PUBLIC_API_URL || "http://192.168.0.129:4000";
-const API_BASE_URL = RAW_API_URL.replace(/\/api\/?$/, "").replace(/\/+$/, "");
+import { API_BASE_URL } from "@/constants/apiConfig";
 
 /**
  * Gets the stored authentication token.

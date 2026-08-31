@@ -15,8 +15,7 @@ export const RECENTLY_VIEWED_STORAGE_PREFIX = "@primo_recently_viewed_";
 export const GUEST_RECENTLY_VIEWED_KEY = "@primo_recently_viewed_guest";
 export const PENDING_RECENTLY_VIEWED_SYNC_PREFIX = "@primo_pending_recently_viewed_sync_";
 
-const RAW_API_URL = process.env.EXPO_PUBLIC_API_URL || "http://192.168.0.129:4000";
-const API_BASE_URL = RAW_API_URL.replace(/\/api\/?$/, "").replace(/\/+$/, "");
+import { API_BASE_URL } from "@/constants/apiConfig";
 
 export function getRecentlyViewedStorageKey(userId: string | number | null | undefined): string {
   if (userId !== undefined && userId !== null && String(userId).trim().length > 0) {

@@ -5,8 +5,7 @@ export const SAVED_ARTISTS_STORAGE_PREFIX = "@primo_saved_artists_";
 export const GUEST_SAVED_ARTISTS_KEY = "@primo_saved_artists_guest";
 export const PENDING_SAVED_ARTISTS_SYNC_PREFIX = "@primo_pending_saved_artists_sync_";
 
-const RAW_API_URL = process.env.EXPO_PUBLIC_API_URL || "http://192.168.0.129:4000";
-const API_BASE_URL = RAW_API_URL.replace(/\/api\/?$/, "").replace(/\/+$/, "");
+import { API_BASE_URL } from "@/constants/apiConfig";
 
 export function getSavedArtistsStorageKey(userId: string | number | null | undefined): string {
   if (userId !== undefined && userId !== null && String(userId).trim().length > 0) {

@@ -186,7 +186,8 @@ async function createCustomTokenForUser(uid, claims = {}) {
 }
 
 /**
- * Verifies a Google ID token cryptographically.
+ * Verifies a Google ID token cryptographically using Firebase Admin SDK.
+ * Fails closed immediately on verification failure without unverified payload decoding.
  */
 async function verifyGoogleIdToken(idToken) {
   if (!idToken || typeof idToken !== "string") {
@@ -195,30 +196,32 @@ async function verifyGoogleIdToken(idToken) {
 
   const { auth, isMock } = initFirebaseAdmin();
 
+  // PRODUCTION / LIVE FIREBASE PATH: Cryptographic verification is strictly required
   if (!isMock && auth) {
-    try {
-      // Decode and verify token
-      const decoded = await auth.verifyIdToken(idToken);
-      if (!decoded.email) {
-        throw new Error("Google token does not contain a verified email.");
-      }
-      return {
-        email: decoded.email.toLowerCase(),
-        displayName: decoded.name || decoded.displayName || "",
-        photoURL: decoded.picture || decoded.photoURL || "",
-        googleUid: decoded.sub || decoded.uid,
-      };
-    } catch (err) {
-      console.warn("[FirebaseAdmin] Live verifyIdToken notice:", err.message);
+    const decoded = await auth.verifyIdToken(idToken);
+    if (!decoded || !decoded.email) {
+      throw new Error("Google token does not contain a verified email.");
     }
+    return {
+      email: decoded.email.toLowerCase(),
+      displayName: decoded.name || decoded.displayName || "",
+      photoURL: decoded.picture || decoded.photoURL || "",
+      googleUid: decoded.sub || decoded.uid,
+    };
   }
 
-  // Parse JWT token payload safely
+  // Fail closed in production if Firebase Admin is not initialized
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("Google authentication is unavailable in production: Firebase Admin SDK uninitialized.");
+  }
+
+  // ISOLATED LOCAL DEVELOPMENT / TEST MOCK ONLY (NODE_ENV !== 'production' && isMock === true)
+  // Used exclusively for offline unit testing when Firebase credentials are not mounted.
   try {
     const parts = idToken.split(".");
     if (parts.length >= 2) {
       const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf8"));
-      if (payload.email) {
+      if (payload && payload.email) {
         return {
           email: String(payload.email).trim().toLowerCase(),
           displayName: payload.name || payload.given_name || "",
@@ -228,7 +231,7 @@ async function verifyGoogleIdToken(idToken) {
       }
     }
   } catch (err) {
-    console.error("[FirebaseAdmin] Token parse error:", err.message);
+    console.error("[FirebaseAdmin] Mock token parse error:", err.message);
   }
 
   throw new Error("Invalid or unverified Google credentials.");
@@ -419,15 +422,23 @@ async function verifyAuthToken(token) {
     if (parts.length !== 3) return null;
 
     const [headerB64, payloadB64, signature] = parts;
+    if (!headerB64 || !payloadB64 || !signature) return null;
+
     const expectedSig = crypto
       .createHmac("sha256", process.env.JWT_SECRET || "primo_jwt_secret_key_2026")
       .update(`${headerB64}.${payloadB64}`)
       .digest("base64url");
 
-    if (signature === expectedSig) {
+    const sigBuf = Buffer.from(signature);
+    const expectedBuf = Buffer.from(expectedSig);
+
+    if (sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf)) {
       const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
       if (payload.exp && Math.floor(Date.now() / 1000) > payload.exp) {
         return null; // Expired
+      }
+      if (!payload || (!payload.uid && !payload.sub)) {
+        return null;
       }
       return {
         uid: payload.uid || payload.sub,
@@ -436,15 +447,7 @@ async function verifyAuthToken(token) {
       };
     }
 
-    // Parse unsigned/base64 payload
-    const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
-    if (payload && (payload.uid || payload.sub)) {
-      return {
-        uid: payload.uid || payload.sub,
-        email: payload.email || "",
-        claims: payload.claims || {},
-      };
-    }
+    return null;
   } catch {
     return null;
   }
