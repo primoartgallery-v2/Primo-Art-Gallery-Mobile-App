@@ -6,6 +6,7 @@ export const GALLERY_CONFIG = {
   phoneRaw: "+918595507802",
   whatsappNumber: "+918595507802", // Standard WhatsApp business number format
   website: "https://primoartgallery.com",
+  liveAuctionUrl: "https://primoartgallery.com/live-auction/",
   instagram: "https://instagram.com/primoartgallery",
   currency: "₹",
   location: "New Delhi, India",

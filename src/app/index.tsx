@@ -1,5 +1,7 @@
 import {
   getArtistsList,
+  getPersistentArtistsList,
+  getPersistentPrimaryProducts,
   getProducts,
   type ArtistItem,
   type WooCommerceProduct,
@@ -52,20 +54,42 @@ export default function HomeScreen() {
   const [showAboutModal, setShowAboutModal] = useState(false);
 
   const loadFirstPage = useCallback(async () => {
-    setIsLoading(true);
     setErrorMessage(null);
 
+    // 1. Instant Cached Render (if available from previous session)
     try {
-      const result = await getProducts({ page: 1, perPage: 12 });
+      const cached = await getPersistentPrimaryProducts();
+      if (cached && cached.products && cached.products.length > 0) {
+        setProducts(cached.products);
+        setCurrentPage(cached.page);
+        setTotalPages(cached.totalPages);
+        setIsLoading(false);
+      } else {
+        setIsLoading(true);
+      }
+    } catch {
+      setIsLoading(true);
+    }
+
+    // 2. Fresh Background Revalidation
+    try {
+      const result = await getProducts({ page: 1, perPage: 12, forceRefresh: true });
       setProducts(result.products);
       setCurrentPage(result.page);
       setTotalPages(result.totalPages);
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Unable to load artworks. Please try again."
-      );
+      setProducts((current) => {
+        // If we have no cached data, display the retry message
+        if (current.length === 0) {
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : "Unable to load artworks. Please try again."
+          );
+        }
+        // If cached artworks are already visible, keep them visible gracefully
+        return current;
+      });
     } finally {
       setIsLoading(false);
     }
@@ -97,9 +121,20 @@ export default function HomeScreen() {
 
   useEffect(() => {
     loadFirstPage();
-    getArtistsList()
-      .then(setArtists)
-      .catch(() => {});
+
+    // Instant cached artists + background refresh
+    getPersistentArtistsList()
+      .then((cachedArtists) => {
+        if (cachedArtists && cachedArtists.length > 0) {
+          setArtists(cachedArtists);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        getArtistsList(true)
+          .then(setArtists)
+          .catch(() => {});
+      });
 
     // Load recently viewed artworks for active collector session (or guest)
     getLocalRecentlyViewed(user?.id)

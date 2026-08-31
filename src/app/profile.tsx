@@ -19,7 +19,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { AppBottomNav } from "@/components/app-bottom-nav";
 import { AboutContactModal } from "@/components/AboutContactModal";
+import { CertificateOfAuthenticityModal } from "@/components/CertificateOfAuthenticityModal";
 import { EditProfileModal } from "@/components/EditProfileModal";
+import { ExhibitionRsvpModal } from "@/components/ExhibitionRsvpModal";
 import { FullWishlistModal } from "@/components/FullWishlistModal";
 import { ManageAddressModal } from "@/components/ManageAddressModal";
 import { SignOutConfirmModal } from "@/components/SignOutConfirmModal";
@@ -28,6 +30,16 @@ import { FONTS } from "@/constants/typography";
 import { useAuth } from "@/context/AuthContext";
 import { useWishlist } from "@/context/WishlistContext";
 import { useAppTheme } from "@/hooks/useAppTheme";
+import {
+  getCloudExhibitionPasses,
+  getLocalExhibitionPasses,
+  type ExhibitionVipPass,
+} from "@/services/exhibitionService";
+import {
+  getCollectorCloudBids,
+  getLocalBids,
+  type AuctionBid,
+} from "@/services/auctions";
 import {
   getLocalRecentlyViewed,
   getCloudRecentlyViewed,
@@ -47,7 +59,7 @@ const AVATAR_ICON_MAP: Record<string, any> = {
 export default function ProfileScreen() {
   const router = useRouter();
   const { colors, isDark } = useAppTheme();
-  const { user, logout } = useAuth();
+  const { user, logout, refreshUser } = useAuth();
   const { savedProducts, removeFromWishlist } = useWishlist();
   const [recentlyViewed, setRecentlyViewed] = useState<RecentlyViewedItem[]>([]);
 
@@ -57,10 +69,14 @@ export default function ProfileScreen() {
   const [showFullWishlistModal, setShowFullWishlistModal] = useState(false);
   const [showEditProfileModal, setShowEditProfileModal] = useState(false);
   const [showManageAddressModal, setShowManageAddressModal] = useState(false);
+  const [selectedCoaArtwork, setSelectedCoaArtwork] = useState<{ id: number; title: string; artist?: string; image?: string } | null>(null);
+  const [exhibitionPasses, setExhibitionPasses] = useState<ExhibitionVipPass[]>([]);
+  const [selectedPassToView, setSelectedPassToView] = useState<ExhibitionVipPass | null>(null);
+  const [myBids, setMyBids] = useState<AuctionBid[]>([]);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
 
-  // Load recently viewed artworks for active collector session (or guest)
+  // Load recently viewed artworks and sync cloud collector profile, passes, and auction bids
   React.useEffect(() => {
     getLocalRecentlyViewed(user?.id)
       .then((items) => {
@@ -74,6 +90,30 @@ export default function ProfileScreen() {
         }
       })
       .catch(() => {});
+
+    // Sync VIP Exhibition Passes
+    if (user?.id) {
+      getLocalExhibitionPasses(user.id).then(setExhibitionPasses);
+      getCloudExhibitionPasses().then((passes) => {
+        if (passes && passes.length > 0) {
+          setExhibitionPasses(passes);
+        }
+      }).catch(() => {});
+    } else {
+      setExhibitionPasses([]);
+    }
+
+    // Sync Auction Bids
+    if (user?.id) {
+      getLocalBids(user.id).then(setMyBids);
+      getCollectorCloudBids().then((bids) => {
+        if (bids && bids.length > 0) {
+          setMyBids(bids);
+        }
+      }).catch(() => {});
+    } else {
+      setMyBids([]);
+    }
   }, [user?.id]);
 
   const handleAction = (callback: () => void) => {
@@ -498,6 +538,64 @@ export default function ProfileScreen() {
           subtitle="Set default delivery address & manage addresses"
           onPress={() => setShowManageAddressModal(true)}
         />
+        <Action
+          icon="ribbon-outline"
+          title="Certificate of Authenticity Vault"
+          subtitle="Inspect official cryptographic provenance & curatorial records"
+          onPress={() => {
+            if (savedProducts.length > 0) {
+              const top = savedProducts[0];
+              setSelectedCoaArtwork({
+                id: top.id,
+                title: top.name,
+                artist: top.attributes?.find((a) => /artist/i.test(a.name))?.options[0] || "Master Artist",
+                image: top.images[0]?.src,
+              });
+            } else if (recentlyViewed.length > 0) {
+              const top = recentlyViewed[0];
+              setSelectedCoaArtwork({
+                id: top.id,
+                title: top.name,
+                artist: top.artist,
+                image: top.imageUrl,
+              });
+            } else {
+              setSelectedCoaArtwork({
+                id: 1260,
+                title: "The Emerging Perspectives",
+                artist: "Primo Master Curated",
+              });
+            }
+          }}
+        />
+        <Action
+          icon="ticket-outline"
+          title="VIP Exhibition Passes"
+          subtitle={
+            exhibitionPasses.length > 0
+              ? `${exhibitionPasses.length} Confirmed Pass(es) • Tap to view & present`
+              : "View confirmed exhibition RSVP guest passes"
+          }
+          onPress={() => {
+            if (exhibitionPasses.length > 0) {
+              setSelectedPassToView(exhibitionPasses[0]);
+            } else {
+              handleAction(() => router.push("/exhibitions" as any));
+            }
+          }}
+        />
+        <Action
+          icon="hammer-outline"
+          title="My Auction Bids"
+          subtitle={
+            myBids.length > 0
+              ? `${myBids.length} Active VIP Bid(s) • Tap to view live catalogue`
+              : "View your active and past live auction bids"
+          }
+          onPress={() => {
+            handleAction(() => router.push("/auctions" as any));
+          }}
+        />
 
         {/* ABOUT & CONTACT SECTION */}
         <Text style={[styles.sectionHeader, { color: colors.gold, marginTop: 24 }]}>
@@ -637,6 +735,24 @@ export default function ProfileScreen() {
         visible={showSignOutModal}
         onClose={() => setShowSignOutModal(false)}
         onConfirm={handleConfirmLogout}
+      />
+
+      {/* PROVENANCE & AUTHENTICITY VAULT MODAL */}
+      <CertificateOfAuthenticityModal
+        visible={Boolean(selectedCoaArtwork)}
+        onClose={() => setSelectedCoaArtwork(null)}
+        artworkId={selectedCoaArtwork?.id || 0}
+        artworkTitle={selectedCoaArtwork?.title}
+        artistName={selectedCoaArtwork?.artist}
+        imageUrl={selectedCoaArtwork?.image}
+      />
+
+      {/* EXHIBITION VIP PASS VIEWER MODAL */}
+      <ExhibitionRsvpModal
+        visible={Boolean(selectedPassToView)}
+        onClose={() => setSelectedPassToView(null)}
+        exhibition={null}
+        initialPass={selectedPassToView}
       />
     </SafeAreaView>
   );

@@ -53,10 +53,11 @@ export default function ExhibitionsScreen() {
 
   const openRegistrationForm = (exhibition?: Exhibition) => {
     try {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch {}
-    const url = exhibition?.registrationUrl || EXHIBITION_REGISTRATION_URL;
-    Linking.openURL(url).catch(() => {});
+    const targetUrl =
+      exhibition?.registrationUrl || EXHIBITION_REGISTRATION_URL;
+    Linking.openURL(targetUrl).catch(() => {});
   };
 
   const openVenueMap = (venue: string, city: string) => {
@@ -248,7 +249,7 @@ export default function ExhibitionsScreen() {
                 </Pressable>
 
                 <Text style={[styles.registerFootnote, { color: colors.textMuted }]}>
-                  Opens official Google RSVP form for guest pass confirmation
+                  Official entry pass &amp; QR code issued via Google Form
                 </Text>
 
                 {/* SECONDARY ACTION BUTTONS */}

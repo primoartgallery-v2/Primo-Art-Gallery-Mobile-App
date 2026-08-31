@@ -29,6 +29,7 @@ import Animated, {
 import RenderHTML from "react-native-render-html";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { CertificateOfAuthenticityModal } from "@/components/CertificateOfAuthenticityModal";
 import { GALLERY_CONFIG } from "@/constants/galleryConfig";
 import { FONTS } from "@/constants/typography";
 import { useAuth } from "@/context/AuthContext";
@@ -93,6 +94,7 @@ export default function PaintingDetailScreen() {
 
   const [showEnquiryModal, setShowEnquiryModal] = useState(false);
   const [showRoomModal, setShowRoomModal] = useState(false);
+  const [showCoaModal, setShowCoaModal] = useState(false);
   const [selectedFrame, setSelectedFrame] = useState<"gold" | "black" | "wood" | "none">("gold");
 
   // VIP Acquisition Enquiry Form State
@@ -424,11 +426,20 @@ export default function PaintingDetailScreen() {
                 </View>
               </View>
 
-              <View
-                style={[
+              <Pressable
+                style={({ pressed }) => [
                   styles.certificateCard,
                   { backgroundColor: colors.cardAlt, borderColor: colors.border },
+                  pressed && { opacity: 0.85, transform: [{ scale: 0.99 }] },
                 ]}
+                onPress={() => {
+                  try {
+                    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  } catch {}
+                  setShowCoaModal(true);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="View official Certificate of Authenticity"
               >
                 <View style={styles.certificateIcon}>
                   <Ionicons name="ribbon-outline" size={26} color={colors.gold} />
@@ -436,7 +447,7 @@ export default function PaintingDetailScreen() {
                 <View style={styles.certificateCopy}>
                   <Text style={[styles.certificateTitle, { color: colors.text }]}>Certificate of Authenticity</Text>
                   <Text style={[styles.certificateText, { color: colors.textSecondary }]}>
-                    This work is accompanied by Primo Art Gallery’s certificate of authenticity.
+                    Tap to inspect official provenance, dimensions & curatorial seal.
                   </Text>
                 </View>
                 <View
@@ -445,10 +456,10 @@ export default function PaintingDetailScreen() {
                     { backgroundColor: colors.goldBadge },
                   ]}
                 >
-                  <Ionicons name="checkmark" size={13} color={colors.goldBadgeText} />
-                  <Text style={[styles.authenticBadgeText, { color: colors.goldBadgeText }]}>AUTHENTIC</Text>
+                  <Ionicons name="shield-checkmark" size={13} color={colors.goldBadgeText} />
+                  <Text style={[styles.authenticBadgeText, { color: colors.goldBadgeText }]}>VIEW COA</Text>
                 </View>
-              </View>
+              </Pressable>
 
               {relatedProducts.length ? (
                 <>
@@ -874,6 +885,16 @@ export default function PaintingDetailScreen() {
           </View>
         </SafeAreaView>
       </Modal>
+
+      {/* DIGITAL CERTIFICATE OF AUTHENTICITY & PROVENANCE MODAL */}
+      <CertificateOfAuthenticityModal
+        visible={showCoaModal}
+        onClose={() => setShowCoaModal(false)}
+        artworkId={product?.id || productId}
+        artworkTitle={product?.name}
+        artistName={artist}
+        imageUrl={product?.images[0]?.src}
+      />
     </View>
   );
 }

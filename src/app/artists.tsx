@@ -29,6 +29,7 @@ import {
 import {
   extractProductArtistIds,
   getArtistsList,
+  getPersistentArtistsList,
   getProducts,
   type ArtistItem,
 } from "@/services/woocommerce";
@@ -49,14 +50,28 @@ export default function ArtistsScreen() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const loadArtists = useCallback(async (refresh = false) => {
-    if (refresh) setIsRefreshing(true);
-    else setIsLoading(true);
+    if (refresh) {
+      setIsRefreshing(true);
+    } else {
+      // Instant Cached Render if available
+      try {
+        const cached = await getPersistentArtistsList();
+        if (cached && cached.length > 0) {
+          setArtists(cached);
+          setIsLoading(false);
+        } else {
+          setIsLoading(true);
+        }
+      } catch {
+        setIsLoading(true);
+      }
+    }
     setErrorMessage(null);
 
     try {
       const [list, productsRes] = await Promise.all([
         getArtistsList(refresh),
-        getProducts({ page: 1, perPage: 100, forceRefresh: refresh }).catch(
+        getProducts({ page: 1, perPage: 30, forceRefresh: refresh }).catch(
           () => null
         ),
       ]);
@@ -74,9 +89,14 @@ export default function ArtistsScreen() {
         setArtistArtworksCount(counts);
       }
     } catch (err) {
-      setErrorMessage(
-        err instanceof Error ? err.message : "Unable to load artists list."
-      );
+      setArtists((current) => {
+        if (current.length === 0) {
+          setErrorMessage(
+            err instanceof Error ? err.message : "Unable to load artists list."
+          );
+        }
+        return current;
+      });
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);

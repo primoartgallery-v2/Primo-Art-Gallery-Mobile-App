@@ -23,8 +23,10 @@ import { useAppTheme } from "@/hooks/useAppTheme";
 import {
   deleteAddress,
   getStoredAddresses,
+  getCloudAddresses,
   saveAddress,
   setDefaultAddress,
+  syncPendingAddressesToCloud,
   type UserAddress,
 } from "@/services/address";
 
@@ -62,6 +64,15 @@ export function ManageAddressModal({
   const loadAddresses = async () => {
     const list = await getStoredAddresses(currentUserId);
     setAddresses(list);
+
+    if (currentUserId) {
+      void syncPendingAddressesToCloud(currentUserId);
+      getCloudAddresses().then((cloudList) => {
+        if (cloudList && cloudList.length > 0) {
+          setAddresses(cloudList);
+        }
+      }).catch(() => {});
+    }
   };
 
   useEffect(() => {

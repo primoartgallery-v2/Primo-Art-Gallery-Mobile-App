@@ -1259,33 +1259,45 @@ app.get(
 // ==========================================
 
 function parseAuctionLot(product) {
-  if (!product) return null;
+  if (!product || typeof product !== "object") return null;
   const metaList = Array.isArray(product.meta_data) ? product.meta_data : [];
   const getMeta = (key) => {
     const item = metaList.find((m) => m && m.key === key);
-    return item ? String(item.value).trim() : null;
+    return item && item.value !== undefined && item.value !== null ? String(item.value).trim() : null;
   };
 
-  const startingBid =
-    parseFloat(getMeta("_auction_start_price") || product.regular_price || product.price || "0") || 0;
-  const currentBid = parseFloat(getMeta("_auction_current_bid") || "0") || 0;
-  const bidIncrement = parseFloat(getMeta("_auction_bid_increment") || "5000") || 5000;
-  const reservePrice = parseFloat(getMeta("_auction_reserved_price") || "0") || 0;
-  const bidCount = parseInt(getMeta("_auction_bid_count") || "0", 10) || 0;
+  // Authoritative auction-specific metadata validation
+  // A product is an auction ONLY if it contains valid authoritative auction metadata (end date & starting price)
+  const rawAuctionEndDate = getMeta("_auction_dates_to");
+  const rawAuctionStartDate = getMeta("_auction_dates_from");
+  const rawAuctionStartPrice = getMeta("_auction_start_price") || getMeta("_auction_starting_bid");
 
-  const startTime =
-    getMeta("_auction_dates_from") || product.date_created || new Date().toISOString();
-  const endTime =
-    getMeta("_auction_dates_to") || new Date(Date.now() + 86400000 * 3).toISOString();
+  // Reject regular catalogue products, products with only regular_price, or missing auction metadata
+  if (!rawAuctionEndDate || !rawAuctionStartPrice) {
+    return null;
+  }
 
-  const startMs = new Date(startTime).getTime();
-  const endMs = new Date(endTime).getTime();
+  const startingBid = parseFloat(rawAuctionStartPrice);
+  if (isNaN(startingBid) || startingBid < 0) {
+    return null;
+  }
+
+  const endMs = new Date(rawAuctionEndDate).getTime();
+  if (isNaN(endMs)) {
+    return null;
+  }
+
+  const startMs = rawAuctionStartDate ? new Date(rawAuctionStartDate).getTime() : 0;
+  if (rawAuctionStartDate && isNaN(startMs)) {
+    return null;
+  }
+
   const nowMs = Date.now();
-
   const isExplicitlyClosed =
-    getMeta("_auction_closed") === "1" || getMeta("_auction_closed") === "2";
-  const isTimeEnded = !isNaN(endMs) && endMs <= nowMs;
-  const isUpcoming = !isNaN(startMs) && startMs > nowMs;
+    getMeta("_auction_closed") === "1" || getMeta("_auction_closed") === "2" || getMeta("_auction_closed") === "yes";
+
+  const isTimeEnded = endMs <= nowMs;
+  const isUpcoming = startMs > 0 && startMs > nowMs;
 
   let status = "live";
   if (isUpcoming) {
@@ -1294,11 +1306,16 @@ function parseAuctionLot(product) {
     status = "closed";
   }
 
+  const currentBid = parseFloat(getMeta("_auction_current_bid") || "0") || 0;
+  const bidIncrement = parseFloat(getMeta("_auction_bid_increment") || "5000") || 5000;
+  const reservePrice = parseFloat(getMeta("_auction_reserved_price") || "0") || 0;
+  const bidCount = parseInt(getMeta("_auction_bid_count") || "0", 10) || 0;
+
   const effectiveCurrent = currentBid > 0 ? currentBid : startingBid;
   const nextMinimumBid = currentBid > 0 ? currentBid + bidIncrement : startingBid;
 
   const artistAttr = Array.isArray(product.attributes)
-    ? product.attributes.find((a) => /artist/i.test(a.name))
+    ? product.attributes.find((a) => a && a.name && /artist/i.test(a.name))
     : null;
   const artist =
     artistAttr && artistAttr.options && artistAttr.options.length > 0
@@ -1324,8 +1341,8 @@ function parseAuctionLot(product) {
     reservePrice,
     nextMinimumBid,
     bidCount,
-    startTime,
-    endTime,
+    startTime: rawAuctionStartDate || new Date(startMs || (endMs - 86400000 * 7)).toISOString(),
+    endTime: rawAuctionEndDate,
     status,
     currency: "₹",
     permalink,
@@ -1653,6 +1670,7 @@ app.post(["/api/auctions/:id/bid", "/auctions/:id/bid"], async (req, res) => {
       price: "100000",
       meta_data: [
         { key: "_auction_start_price", value: "100000" },
+        { key: "_auction_dates_to", value: new Date(Date.now() + 86400000 * 3).toISOString() },
         { key: "_auction_bid_increment", value: "5000" },
       ],
       images: [{ src: "https://primoartgallery.com/wp-content/uploads/sample.jpg" }],
@@ -1660,6 +1678,9 @@ app.post(["/api/auctions/:id/bid", "/auctions/:id/bid"], async (req, res) => {
   }
 
   const liveLot = parseAuctionLot(liveProduct);
+  if (!liveLot) {
+    return res.status(404).json({ error: "Auction lot not found or inactive." });
+  }
 
   if (liveLot.status !== "live") {
     return res.status(400).json({
@@ -2325,5 +2346,6 @@ app.KNOWN_INSECURE_SECRETS = KNOWN_INSECURE_SECRETS;
 app.distributedRateLimiter = distributedRateLimiter;
 app.auctionEventService = auctionEventService;
 app.pushNotificationService = pushNotificationService;
+app.parseAuctionLot = parseAuctionLot;
 
 module.exports = app;

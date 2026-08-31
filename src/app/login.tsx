@@ -21,6 +21,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { FONTS } from "@/constants/typography";
 import { useAuth } from "@/context/AuthContext";
 import { useAppTheme } from "@/hooks/useAppTheme";
+import { promptGoogleAuth } from "@/services/googleAuth";
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -131,14 +132,38 @@ export default function LoginScreen() {
     setIsGoogleSubmitting(true);
 
     try {
-      Alert.alert(
-        "Google Authentication",
-        "Google authentication is active. To authenticate directly via your Google account, select your preferred Google email or proceed with instant Email OTP / Password.",
-        [
-          { text: "Use Email OTP", onPress: () => setAuthMode("otp") },
-          { text: "Cancel", style: "cancel" },
-        ]
-      );
+      const authResult = await promptGoogleAuth();
+
+      if (authResult.type === "cancel") {
+        setIsGoogleSubmitting(false);
+        return;
+      }
+
+      if (authResult.type === "unconfigured") {
+        Alert.alert(
+          "Google Sign-In Notice",
+          authResult.errorMessage ||
+            "Google Sign-In is not yet configured with EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID. Please use instant Email OTP or Password login.",
+          [
+            { text: "Use Email OTP", onPress: () => setAuthMode("otp") },
+            { text: "OK", style: "cancel" },
+          ]
+        );
+        setIsGoogleSubmitting(false);
+        return;
+      }
+
+      if (authResult.type === "error" || !authResult.idToken) {
+        setErrorMessage(authResult.errorMessage || "Google authentication failed.");
+        setIsGoogleSubmitting(false);
+        return;
+      }
+
+      await loginWithGoogle(authResult.idToken);
+      try {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } catch {}
+      router.replace("/profile" as any);
     } catch (err: any) {
       setErrorMessage(err.message || "Google sign-in could not be completed.");
     } finally {

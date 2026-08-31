@@ -2,12 +2,12 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { Image as ExpoImage } from "expo-image";
 import { useRouter } from "expo-router";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Linking,
-  Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -20,25 +20,25 @@ import { AppBottomNav } from "@/components/app-bottom-nav";
 import { GALLERY_CONFIG } from "@/constants/galleryConfig";
 import { FONTS } from "@/constants/typography";
 import { useAppTheme } from "@/hooks/useAppTheme";
-import { getProducts, type WooCommerceProduct } from "@/services/woocommerce";
-
-const LIVE_AUCTION_URL = "https://primoartgallery.com/live-auction/";
+import { getLiveAuctions, type AuctionLot } from "@/services/auctions";
 
 export default function AuctionsScreen() {
   const router = useRouter();
   const { colors, isDark } = useAppTheme();
-  const [featuredLots, setFeaturedLots] = useState<WooCommerceProduct[]>([]);
+
+  const [lots, setLots] = useState<AuctionLot[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const loadLots = useCallback(async () => {
-    setIsLoading(true);
     try {
-      const res = await getProducts({ page: 1, perPage: 8 });
-      setFeaturedLots(res.products.slice(0, 6));
+      const data = await getLiveAuctions();
+      setLots(data);
     } catch {
       // Fallback
     } finally {
       setIsLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
@@ -46,11 +46,25 @@ export default function AuctionsScreen() {
     loadLots();
   }, [loadLots]);
 
-  const openLiveAuction = () => {
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    loadLots();
+  }, [loadLots]);
+
+  // Display ONLY currently live/running auctions
+  const liveLots = useMemo(() => {
+    return lots.filter((l) => l.status === "live");
+  }, [lots]);
+
+  const handleOpenWebsiteAuction = (lot?: AuctionLot) => {
     try {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {}
-    Linking.openURL(LIVE_AUCTION_URL).catch(() => {});
+    const targetUrl =
+      lot?.permalink && typeof lot.permalink === "string" && lot.permalink.startsWith("http")
+        ? lot.permalink
+        : (GALLERY_CONFIG.liveAuctionUrl || "https://primoartgallery.com/live-auction/");
+    Linking.openURL(targetUrl).catch(() => {});
   };
 
   const openWhatsAppConcierge = (lotName?: string) => {
@@ -58,8 +72,8 @@ export default function AuctionsScreen() {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {}
     const msg = lotName
-      ? `Hello Primo Art Gallery, I am interested in placing a private bid on "${lotName}" in the live auction.`
-      : "Hello Primo Art Gallery, I would like assistance and private bidding registration for the Live Auction.";
+      ? `Hello Primo Art Gallery, I am interested in placing a private VIP bid on "${lotName}".`
+      : "Hello Primo Art Gallery, I would like VIP auction bidding advisory.";
     const url = `https://wa.me/${GALLERY_CONFIG.whatsappNumber.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(msg)}`;
     Linking.openURL(url).catch(() => {});
   };
@@ -94,6 +108,14 @@ export default function AuctionsScreen() {
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.gold}
+            colors={[colors.gold]}
+          />
+        }
       >
         {/* LIVE AUCTION HERO BANNER */}
         <View
@@ -107,35 +129,42 @@ export default function AuctionsScreen() {
         >
           <View style={styles.liveIndicatorRow}>
             <View style={styles.livePulseDot} />
-            <Text style={[styles.liveIndicatorText, { color: colors.gold }]}>LIVE AUCTION ACTIVE</Text>
+            <Text style={[styles.liveIndicatorText, { color: colors.gold }]}>
+              CURATED MASTERWORKS AUCTION
+            </Text>
           </View>
 
           <Text style={styles.heroTitle}>Exclusive Curated Art Bidding</Text>
           <Text style={styles.heroSubtitle}>
-            Participate in real-time competitive bidding on verified, original
-            contemporary masterworks with certificates of authenticity.
+            Live auctions take place on the official Primo Art Gallery website. Tap any lot to participate in real-time competitive bidding.
           </Text>
 
-          {/* MAIN CTA BUTTON TO DIRECTLY BID ON WEBSITE */}
+          {/* MAIN CTA BUTTON */}
           <Pressable
             style={({ pressed }) => [
               styles.enterAuctionButton,
               { backgroundColor: colors.gold },
               pressed && styles.buttonPressed,
             ]}
-            onPress={openLiveAuction}
+            onPress={() => {
+              if (liveLots.length > 0) {
+                handleOpenWebsiteAuction(liveLots[0]);
+              } else {
+                handleOpenWebsiteAuction();
+              }
+            }}
             accessibilityRole="button"
-            accessibilityLabel="Enter live auction"
+            accessibilityLabel="Bid on official website"
           >
-            <Ionicons name="hammer" size={18} color="#17202A" />
+            <Ionicons name="open-outline" size={18} color="#17202A" />
             <Text style={styles.enterAuctionButtonText}>
-              ENTER LIVE AUCTION &amp; BID
+              BID ON WEBSITE
             </Text>
             <Ionicons name="arrow-forward" size={16} color="#17202A" />
           </Pressable>
 
           <Text style={styles.heroFootnote}>
-            Direct link to official Primo Live Auction Portal
+            Authoritative website bidding &bull; Verified digital certificates of authenticity
           </Text>
         </View>
 
@@ -166,29 +195,33 @@ export default function AuctionsScreen() {
           </Pressable>
         </View>
 
-        {/* FEATURED AUCTION LOTS */}
+        {/* SECTION HEADER */}
         <View style={styles.sectionHeaderRow}>
           <View>
-            <Text style={[styles.sectionEyebrow, { color: colors.gold }]}>CURATED LOTS</Text>
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Featured Auction Works</Text>
+            <Text style={[styles.sectionEyebrow, { color: colors.gold }]}>CATALOGUE</Text>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>
+              Live Bidding Lots ({liveLots.length})
+            </Text>
           </View>
-          <Pressable onPress={openLiveAuction}>
-            <Text style={[styles.viewAllText, { color: colors.gold }]}>View All Lots →</Text>
-          </Pressable>
         </View>
 
         {isLoading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="small" color={colors.gold} />
-            <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading curated lots…</Text>
+            <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading curated auction lots…</Text>
+          </View>
+        ) : liveLots.length === 0 ? (
+          <View style={[styles.emptyContainer, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Ionicons name="hammer-outline" size={36} color={colors.gold} />
+            <Text style={[styles.emptyTitle, { color: colors.text }]}>No Live Auctions Right Now</Text>
+            <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
+              Check back soon for new curated masterwork auctions on Primo Art Gallery.
+            </Text>
           </View>
         ) : (
           <View style={styles.lotsGrid}>
-            {featuredLots.map((lot, index) => {
-              const artistMeta = lot.attributes.find((a) =>
-                /artist/i.test(a.name)
-              )?.options[0];
-              const priceDisplay = lot.price ? `₹ ${lot.price}` : "Reserve on request";
+            {liveLots.map((lot) => {
+              const priceDisplay = `₹ ${Number(lot.currentBid).toLocaleString("en-IN")}`;
 
               return (
                 <View
@@ -198,15 +231,16 @@ export default function AuctionsScreen() {
                     { backgroundColor: colors.card, borderColor: colors.border },
                   ]}
                 >
-                  <View
+                  <Pressable
                     style={[
                       styles.lotImageFrame,
                       { backgroundColor: isDark ? "#20222C" : "#EBE6DD" },
                     ]}
+                    onPress={() => handleOpenWebsiteAuction(lot)}
                   >
-                    {lot.images[0]?.src ? (
+                    {lot.imageUrl ? (
                       <ExpoImage
-                        source={{ uri: lot.images[0].src }}
+                        source={{ uri: lot.imageUrl }}
                         style={styles.lotImage}
                         contentFit="cover"
                         cachePolicy="memory-disk"
@@ -219,19 +253,24 @@ export default function AuctionsScreen() {
                     <View
                       style={[
                         styles.lotBadge,
-                        { backgroundColor: colors.goldSoft, borderColor: colors.gold },
+                        { backgroundColor: "rgba(28, 27, 24, 0.88)", borderColor: colors.gold },
                       ]}
                     >
-                      <Text style={[styles.lotBadgeText, { color: colors.gold }]}>LOT #{lot.id}</Text>
+                      <Text style={[styles.lotBadgeText, { color: colors.gold }]}>{lot.lotNumber}</Text>
                     </View>
-                  </View>
+
+                    <View style={styles.liveDotBadge}>
+                      <View style={styles.livePulseDotSmall} />
+                      <Text style={styles.liveDotText}>LIVE</Text>
+                    </View>
+                  </Pressable>
 
                   <View style={styles.lotBody}>
                     <Text style={[styles.lotArtist, { color: colors.textSecondary }]} numberOfLines={1}>
-                      {artistMeta || lot.categories[0]?.name || "Master Artist"}
+                      {lot.artist}
                     </Text>
                     <Text style={[styles.lotTitle, { color: colors.text }]} numberOfLines={1}>
-                      {lot.name}
+                      {lot.title}
                     </Text>
 
                     <View
@@ -240,7 +279,9 @@ export default function AuctionsScreen() {
                         { backgroundColor: colors.backgroundElement, borderColor: colors.borderLight },
                       ]}
                     >
-                      <Text style={[styles.estimateLabel, { color: colors.textSecondary }]}>ESTIMATE / RESERVE</Text>
+                      <Text style={[styles.estimateLabel, { color: colors.textSecondary }]}>
+                        {lot.bidCount > 0 ? "CURRENT BID" : "STARTING BID"}
+                      </Text>
                       <Text style={[styles.estimateValue, { color: colors.gold }]}>{priceDisplay}</Text>
                     </View>
 
@@ -250,9 +291,11 @@ export default function AuctionsScreen() {
                         { backgroundColor: colors.gold },
                         pressed && styles.buttonPressed,
                       ]}
-                      onPress={() => openLiveAuction()}
+                      onPress={() => handleOpenWebsiteAuction(lot)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Bid on ${lot.title} on website`}
                     >
-                      <Ionicons name="hammer-outline" size={14} color="#FFFFFF" />
+                      <Ionicons name="open-outline" size={15} color="#17202A" />
                       <Text style={styles.lotBidButtonText}>BID ON WEBSITE</Text>
                     </Pressable>
                   </View>
@@ -274,9 +317,9 @@ export default function AuctionsScreen() {
           <View style={styles.guaranteeRow}>
             <Ionicons name="shield-checkmark" size={20} color={colors.gold} />
             <View style={styles.guaranteeCopy}>
-              <Text style={[styles.guaranteeTitle, { color: colors.text }]}>Verified Provenance</Text>
+              <Text style={[styles.guaranteeTitle, { color: colors.text }]}>Verified Provenance &amp; CoA</Text>
               <Text style={[styles.guaranteeText, { color: colors.textSecondary }]}>
-                Every work is authenticated and includes a physical gallery certificate.
+                Every work is authenticated and includes a digital certificate of authenticity.
               </Text>
             </View>
           </View>
@@ -286,7 +329,7 @@ export default function AuctionsScreen() {
             <View style={styles.guaranteeCopy}>
               <Text style={[styles.guaranteeTitle, { color: colors.text }]}>White-Glove Insured Delivery</Text>
               <Text style={[styles.guaranteeText, { color: colors.textSecondary }]}>
-                Secure, museum-grade insured packaging and doorstep shipping worldwide.
+                Secure, museum-grade packaging and insured doorstep delivery.
               </Text>
             </View>
           </View>
@@ -294,9 +337,9 @@ export default function AuctionsScreen() {
           <View style={styles.guaranteeRow}>
             <Ionicons name="lock-closed" size={20} color={colors.gold} />
             <View style={styles.guaranteeCopy}>
-              <Text style={[styles.guaranteeTitle, { color: colors.text }]}>Transparent Bidding</Text>
+              <Text style={[styles.guaranteeTitle, { color: colors.text }]}>Official Website Bidding</Text>
               <Text style={[styles.guaranteeText, { color: colors.textSecondary }]}>
-                Encrypted, verified real-time bid logging on our secure web platform.
+                Safe and authoritative competitive bidding on the official Primo Art Gallery website.
               </Text>
             </View>
           </View>
@@ -311,7 +354,6 @@ export default function AuctionsScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: "#FAF8F3",
   },
   header: {
     paddingHorizontal: 22,
@@ -321,18 +363,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     borderBottomWidth: 1,
-    borderBottomColor: "#EFEAE0",
-    backgroundColor: "#FAF8F3",
   },
   eyebrow: {
-    color: "#B8964E",
     fontSize: 10,
     fontFamily: FONTS.sansExtraBold,
     letterSpacing: 1.7,
   },
   title: {
     marginTop: 3,
-    color: "#252525",
     fontFamily: FONTS.serifBold,
     fontSize: 29,
   },
@@ -343,8 +381,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "#E8E2D8",
-    backgroundColor: "#FFFFFF",
   },
   scrollContent: {
     paddingHorizontal: 20,
@@ -352,11 +388,9 @@ const styles = StyleSheet.create({
     paddingBottom: 110,
   },
   heroCard: {
-    backgroundColor: "#1C1B18",
     borderRadius: 22,
     padding: 22,
     borderWidth: 1,
-    borderColor: "#3A362D",
     marginBottom: 16,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 6 },
@@ -369,12 +403,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
     alignSelf: "flex-start",
-    backgroundColor: "rgba(231, 76, 60, 0.15)",
+    backgroundColor: "rgba(212, 175, 55, 0.15)",
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: "rgba(231, 76, 60, 0.35)",
+    borderColor: "rgba(212, 175, 55, 0.35)",
   },
   livePulseDot: {
     width: 8,
@@ -383,8 +417,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#E74C3C",
   },
   liveIndicatorText: {
-    color: "#FF6B6B",
-    fontSize: 10,
+    fontSize: 9.5,
     fontFamily: FONTS.sansExtraBold,
     letterSpacing: 1.2,
   },
@@ -392,28 +425,26 @@ const styles = StyleSheet.create({
     marginTop: 14,
     color: "#FFFFFF",
     fontFamily: FONTS.serifBold,
-    fontSize: 26,
-    lineHeight: 32,
+    fontSize: 24,
+    lineHeight: 30,
   },
   heroSubtitle: {
     marginTop: 8,
     color: "#D3CABE",
-    fontSize: 13,
+    fontSize: 12.5,
     fontFamily: FONTS.sansRegular,
-    lineHeight: 19,
+    lineHeight: 18,
   },
   enterAuctionButton: {
     marginTop: 18,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: "#E5C158",
+    height: 50,
+    borderRadius: 25,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 10,
-    shadowColor: "#E5C158",
+    gap: 8,
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
+    shadowOpacity: 0.25,
     shadowRadius: 8,
     elevation: 4,
   },
@@ -431,12 +462,10 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   conciergeCard: {
-    backgroundColor: "#FFFFFF",
     borderRadius: 18,
     padding: 16,
     borderWidth: 1,
-    borderColor: "#E8E2D8",
-    marginBottom: 24,
+    marginBottom: 20,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -449,14 +478,12 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   conciergeTitle: {
-    color: "#252525",
     fontSize: 13,
     fontFamily: FONTS.sansBold,
   },
   conciergeSubtitle: {
     marginTop: 2,
-    color: "#77736B",
-    fontSize: 10,
+    fontSize: 10.5,
     fontFamily: FONTS.sansRegular,
     lineHeight: 14,
   },
@@ -474,6 +501,21 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.sansExtraBold,
     letterSpacing: 0.8,
   },
+  tabsRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 20,
+  },
+  tabPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  tabPillText: {
+    fontSize: 11.5,
+    fontFamily: FONTS.sansBold,
+  },
   sectionHeaderRow: {
     flexDirection: "row",
     alignItems: "flex-end",
@@ -481,21 +523,14 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   sectionEyebrow: {
-    color: "#B8964E",
     fontSize: 9,
     fontFamily: FONTS.sansExtraBold,
     letterSpacing: 1.5,
   },
   sectionTitle: {
     marginTop: 2,
-    color: "#252525",
     fontFamily: FONTS.serifBold,
     fontSize: 22,
-  },
-  viewAllText: {
-    color: "#B8964E",
-    fontSize: 12,
-    fontFamily: FONTS.sansBold,
   },
   loadingContainer: {
     paddingVertical: 40,
@@ -503,9 +538,27 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     marginTop: 8,
-    color: "#77736B",
     fontSize: 12,
     fontFamily: FONTS.sansRegular,
+  },
+  emptyContainer: {
+    padding: 30,
+    borderRadius: 16,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    marginVertical: 20,
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontFamily: FONTS.serifBold,
+    marginTop: 10,
+  },
+  emptySubtitle: {
+    fontSize: 12,
+    fontFamily: FONTS.sansRegular,
+    marginTop: 4,
+    textAlign: "center",
   },
   lotsGrid: {
     flexDirection: "row",
@@ -516,17 +569,14 @@ const styles = StyleSheet.create({
   },
   lotCard: {
     width: "48%",
-    backgroundColor: "#FFFFFF",
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: "#E8E2D8",
     overflow: "hidden",
     marginBottom: 12,
   },
   lotImageFrame: {
     width: "100%",
     height: 160,
-    backgroundColor: "#FAF6EC",
     position: "relative",
   },
   lotImage: {
@@ -542,75 +592,90 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 8,
     left: 8,
-    backgroundColor: "rgba(28, 27, 24, 0.85)",
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 8,
+    borderWidth: 0.5,
   },
   lotBadgeText: {
-    color: "#E5C158",
     fontSize: 9,
     fontFamily: FONTS.sansExtraBold,
     letterSpacing: 0.8,
+  },
+  liveDotBadge: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(0,0,0,0.75)",
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  livePulseDotSmall: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: "#E74C3C",
+  },
+  liveDotText: {
+    color: "#FFFFFF",
+    fontSize: 8,
+    fontFamily: FONTS.sansBold,
+    letterSpacing: 0.5,
   },
   lotBody: {
     padding: 12,
   },
   lotArtist: {
-    color: "#77736B",
     fontSize: 10,
     fontFamily: FONTS.sansMedium,
   },
   lotTitle: {
     marginTop: 2,
-    color: "#252525",
     fontSize: 13,
     fontFamily: FONTS.sansBold,
   },
   estimateRow: {
     marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: "#F4EFE6",
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
   },
   estimateLabel: {
-    color: "#8A847B",
-    fontSize: 8,
+    fontSize: 7.5,
     fontFamily: FONTS.sansExtraBold,
     letterSpacing: 0.8,
   },
   estimateValue: {
     marginTop: 2,
-    color: "#B8964E",
-    fontSize: 12,
+    fontSize: 13,
     fontFamily: FONTS.sansBold,
   },
   lotBidButton: {
     marginTop: 10,
     height: 36,
     borderRadius: 18,
-    backgroundColor: "#252525",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
   },
   lotBidButtonText: {
-    color: "#FFFFFF",
-    fontSize: 9,
+    color: "#17202A",
+    fontSize: 9.5,
     fontFamily: FONTS.sansExtraBold,
     letterSpacing: 0.8,
   },
   guaranteesContainer: {
-    backgroundColor: "#FFFFFF",
     borderRadius: 20,
     padding: 20,
     borderWidth: 1,
-    borderColor: "#E8E2D8",
     gap: 16,
   },
   guaranteesHeader: {
-    color: "#B8964E",
     fontSize: 10,
     fontFamily: FONTS.sansExtraBold,
     letterSpacing: 1.5,
@@ -624,13 +689,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   guaranteeTitle: {
-    color: "#252525",
     fontSize: 13,
     fontFamily: FONTS.sansBold,
   },
   guaranteeText: {
     marginTop: 2,
-    color: "#77736B",
     fontSize: 11,
     fontFamily: FONTS.sansRegular,
     lineHeight: 16,
