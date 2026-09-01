@@ -1095,6 +1095,29 @@ app.post(["/api/enquiries", "/enquiries"], async (req, res) => {
   }
 });
 
+/**
+ * GET /api/collector/enquiries
+ * Retrieves all artwork acquisition enquiries for the authenticated user.
+ * Authenticated UID is derived strictly from the verified Bearer token.
+ * Rejects unauthenticated requests with 401.
+ */
+app.get(["/api/collector/enquiries", "/collector/enquiries"], async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const verifiedUser = await firebaseAdmin.verifyAuthToken(authHeader);
+
+  if (!verifiedUser || !verifiedUser.uid) {
+    return res.status(401).json({ error: "Authentication required to access enquiries." });
+  }
+
+  try {
+    const enquiries = await collectorStore.getEnquiries(verifiedUser.uid);
+    return res.json({ success: true, count: enquiries.length, enquiries });
+  } catch (err) {
+    console.error(`[Enquiry API] getEnquiries error for ${verifiedUser.uid}:`, err.message);
+    return res.status(500).json({ error: "Failed to retrieve enquiries." });
+  }
+});
+
 // ==========================================
 // EXHIBITION VIP GUEST PASS & RSVP PIPELINE
 // ==========================================

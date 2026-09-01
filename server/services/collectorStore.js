@@ -384,6 +384,64 @@ class CollectorStore {
     return { success: true, enquiryId, enquiry: payload };
   }
 
+  /**
+   * Retrieves all artwork acquisition enquiries submitted by an authenticated collector UID.
+   * Enforces strict UID matching. Guest enquiries (collectorUid = null) are never returned.
+   */
+  async getEnquiries(uid) {
+    if (!uid || typeof uid !== "string" || uid.trim() === "") {
+      return [];
+    }
+
+    const cleanUid = String(uid).trim();
+
+    if (this.firestore) {
+      try {
+        const snapshot = await this.firestore
+          .collection("artworks_enquiries")
+          .where("collectorUid", "==", cleanUid)
+          .get();
+
+        if (snapshot.empty) {
+          return [];
+        }
+
+        const enquiries = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          if (data && data.collectorUid === cleanUid) {
+            enquiries.push(data);
+          }
+        });
+
+        // Sort in memory by createdAt descending (no composite Firestore index needed)
+        enquiries.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+        return enquiries;
+      } catch (err) {
+        console.warn(`[CollectorStore] Firestore getEnquiries error for ${cleanUid}, fallback to disk:`, err.message);
+      }
+    }
+
+    // Disk fallback for local testing
+    try {
+      this._ensureStorage();
+      const enquiriesFile = path.join(this.dataDir, "artworks_enquiries.json");
+      if (fs.existsSync(enquiriesFile)) {
+        let allEnquiries = [];
+        try {
+          allEnquiries = JSON.parse(fs.readFileSync(enquiriesFile, "utf8")) || [];
+        } catch {}
+        return allEnquiries
+          .filter((e) => e && typeof e.collectorUid === "string" && e.collectorUid === cleanUid)
+          .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      }
+    } catch (diskErr) {
+      console.error("[CollectorStore] Disk getEnquiries notice:", diskErr.message);
+    }
+
+    return [];
+  }
+
   // ==========================================
   // COLLECTOR ADDRESS BOOK (users/{uid}/collector_data/addresses)
   // ==========================================
