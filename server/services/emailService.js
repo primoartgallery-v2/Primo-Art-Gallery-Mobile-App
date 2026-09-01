@@ -186,16 +186,129 @@ async function sendOtpEmail({ email, otpCode }) {
   }
 }
 
+/**
+ * Resolves authoritative WooCommerce artwork metadata (title, artist, permalink, image)
+ * using the provided numeric artworkId.
+ */
+async function resolveAuthoritativeArtwork(artworkId) {
+  const wooUrl = process.env.WOOCOMMERCE_URL;
+  const key = process.env.WOOCOMMERCE_CONSUMER_KEY || process.env.CONSUMER_KEY;
+  const secret = process.env.WOOCOMMERCE_CONSUMER_SECRET || process.env.CONSUMER_SECRET;
+
+  if (!wooUrl || !key || !secret || !artworkId) {
+    return null;
+  }
+
+  const params = new URLSearchParams({
+    consumer_key: key,
+    consumer_secret: secret,
+  });
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 6000);
+
+  try {
+    const res = await fetch(`${wooUrl}/wp-json/wc/v3/products/${artworkId}?${params.toString()}`, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "PrimoArtGallery-Server/1.0",
+      },
+      signal: controller.signal,
+    });
+
+    if (!res.ok) return null;
+    const product = await res.json();
+    if (!product || !product.id) return null;
+
+    const title = product.name ? String(product.name).trim() : "";
+    const permalink = product.permalink ? String(product.permalink).trim() : "";
+    const image =
+      Array.isArray(product.images) && product.images.length > 0 && product.images[0]?.src
+        ? String(product.images[0].src).trim()
+        : null;
+
+    let artist = "";
+    if (Array.isArray(product.attributes)) {
+      const attr = product.attributes.find((a) =>
+        /artist/i.test(a.name) || /creator/i.test(a.name)
+      );
+      if (attr && Array.isArray(attr.options) && attr.options.length > 0) {
+        artist = String(attr.options[0]).trim();
+      }
+    }
+    if (!artist && Array.isArray(product.meta_data)) {
+      const meta = product.meta_data.find((m) =>
+        /artist/i.test(m.key) || /creator/i.test(m.key)
+      );
+      if (meta && typeof meta.value === "string" && meta.value.trim()) {
+        artist = String(meta.value).trim();
+      }
+    }
+    if (!artist && Array.isArray(product.meta_data)) {
+      const egns = product.meta_data.find((m) => m.key === "egns_product_meta");
+      if (egns?.value) {
+        let artistIds = null;
+        if (typeof egns.value === "object" && egns.value !== null) {
+          artistIds = egns.value.artists_list_ids;
+        } else if (typeof egns.value === "string") {
+          try {
+            const parsed = JSON.parse(egns.value);
+            artistIds = parsed.artists_list_ids;
+          } catch {}
+        }
+        if (Array.isArray(artistIds) && artistIds.length > 0) {
+          const aId = artistIds[0];
+          try {
+            const aRes = await fetch(`${wooUrl}/wp-json/wp/v2/artists/${aId}`, {
+              headers: { Accept: "application/json" },
+              signal: AbortSignal.timeout(4000),
+            });
+            if (aRes.ok) {
+              const aData = await aRes.json();
+              if (aData?.title?.rendered) {
+                artist = aData.title.rendered
+                  .replace(/&amp;/g, "&")
+                  .replace(/&#0*39;/g, "'")
+                  .replace(/&quot;/g, '"')
+                  .trim();
+              }
+            }
+          } catch {}
+        }
+      }
+    }
+
+    return {
+      title,
+      artist,
+      permalink,
+      image,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function buildArtworkEnquiryEmailHtml({
   enquiryId,
   artworkId,
   artworkTitle,
+  artistName,
+  artworkImage,
+  artworkUrl,
   collectorName,
   collectorEmail,
   collectorPhone,
   message,
   collectorUid,
 }) {
+  const replyMailtoSubject = encodeURIComponent(
+    `Re: Acquisition Enquiry — ${artworkTitle} [${enquiryId}]`
+  );
+
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -203,45 +316,100 @@ function buildArtworkEnquiryEmailHtml({
   <meta charset="UTF-8">
   <title>Primo Art Gallery — New Acquisition Enquiry</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #FAF8F5; color: #17202A; margin: 0; padding: 20px; }
-    .container { max-width: 580px; margin: 20px auto; background: #FFFFFF; border: 1px solid #E8E2D8; border-radius: 16px; overflow: hidden; }
-    .header { background-color: #17202A; padding: 28px; text-align: center; }
-    .brand-eyebrow { color: #D4AF37; font-size: 11px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px; }
-    .brand-title { color: #FFFFFF; font-size: 22px; font-weight: 700; margin: 0; }
-    .body { padding: 32px; }
-    .field-label { font-size: 11px; font-weight: 700; color: #8A857C; text-transform: uppercase; letter-spacing: 1px; margin-top: 16px; margin-bottom: 4px; }
-    .field-value { font-size: 15px; color: #17202A; font-weight: 500; }
-    .message-box { background-color: #FAF8F5; border-left: 3px solid #D4AF37; padding: 16px; border-radius: 6px; margin-top: 16px; font-size: 14px; line-height: 22px; white-space: pre-wrap; }
-    .footer { text-align: center; padding: 20px; font-size: 12px; color: #8A857C; border-top: 1px solid #E8E2D8; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #FAF8F5; color: #17202A; margin: 0; padding: 20px; -webkit-font-smoothing: antialiased; }
+    .container { max-width: 600px; margin: 20px auto; background: #FFFFFF; border: 1.5px solid #D4AF37; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.06); }
+    .header { background-color: #17202A; padding: 32px 24px; text-align: center; border-bottom: 2px solid #D4AF37; }
+    .brand-eyebrow { color: #D4AF37; font-size: 11px; font-weight: 800; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 6px; }
+    .brand-sub { color: #A0AAB5; font-size: 12px; font-weight: 500; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px; }
+    .brand-title { color: #FFFFFF; font-size: 22px; font-weight: 700; margin: 0; letter-spacing: 0.5px; }
+    .body { padding: 32px 28px; }
+    .section-title { font-size: 11px; font-weight: 800; color: #8A857C; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 24px; margin-bottom: 8px; }
+    .section-title:first-child { margin-top: 0; }
+    
+    .artwork-card { background-color: #FAF8F5; border: 1px solid #E8E2D8; border-radius: 12px; padding: 20px; }
+    .artwork-title { font-size: 18px; font-weight: 700; color: #17202A; line-height: 24px; margin-bottom: 4px; }
+    .artwork-artist { font-size: 13px; font-weight: 600; color: #9A7B38; margin-bottom: 6px; }
+    .artwork-id-badge { font-family: monospace; font-size: 12px; color: #8A857C; font-weight: 600; }
+    .artwork-image { width: 100%; max-height: 260px; border-radius: 8px; border: 1px solid #E8E2D8; object-fit: cover; display: block; margin-top: 14px; margin-bottom: 14px; }
+    
+    .badge-verified { display: inline-block; background-color: #F8F0DC; color: #6D5421; font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 12px; margin-left: 6px; }
+    .badge-guest { display: inline-block; background-color: #F0ECE4; color: #666666; font-size: 11px; font-weight: 600; padding: 2px 10px; border-radius: 12px; margin-left: 6px; }
+    
+    .message-box { background-color: #FAF8F5; border-left: 3.5px solid #D4AF37; padding: 18px; border-radius: 6px; font-size: 14px; line-height: 22px; color: #2C3E50; white-space: pre-wrap; word-break: break-word; }
+    
+    .ref-box { background-color: #FAF8F5; border: 1px dashed #D4AF37; border-radius: 8px; padding: 12px 16px; text-align: center; margin-top: 20px; font-family: monospace; font-size: 13px; color: #666; }
+    
+    .btn-row { margin-top: 28px; text-align: center; }
+    .btn-primary { display: inline-block; background-color: #17202A; color: #FFFFFF !important; font-size: 13px; font-weight: 700; text-decoration: none; padding: 12px 24px; border-radius: 8px; border: 1px solid #D4AF37; letter-spacing: 0.5px; margin: 4px 6px; }
+    .btn-secondary { display: inline-block; background-color: #B8964E; color: #FFFFFF !important; font-size: 13px; font-weight: 700; text-decoration: none; padding: 12px 24px; border-radius: 8px; letter-spacing: 0.5px; margin: 4px 6px; }
+    
+    .footer { text-align: center; padding: 24px 20px; font-size: 11px; color: #8A857C; border-top: 1px solid #E8E2D8; line-height: 18px; }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="header">
-      <div class="brand-eyebrow">Acquisition Advisory Desk</div>
+      <div class="brand-eyebrow">PRIMO ART GALLERY</div>
+      <div class="brand-sub">Acquisition Advisory Desk</div>
       <h1 class="brand-title">New Artwork Enquiry</h1>
     </div>
+    
     <div class="body">
-      <div class="field-label">Artwork Details</div>
-      <div class="field-value"><strong>${artworkTitle}</strong> (Item ID: #${artworkId})</div>
+      <!-- 1. ARTWORK CARD -->
+      <div class="section-title">Artwork Details</div>
+      <div class="artwork-card">
+        <div class="artwork-title">${artworkTitle}</div>
+        ${artistName ? `<div class="artwork-artist">by ${artistName}</div>` : ''}
+        <div class="artwork-id-badge">Item ID: #${artworkId}</div>
+        ${artworkImage ? `<img class="artwork-image" src="${artworkImage}" alt="${artworkTitle}" />` : ''}
+        ${artworkUrl ? `
+        <div style="margin-top: 12px;">
+          <a href="${artworkUrl}" target="_blank" style="display: inline-block; background-color: #B8964E; color: #FFFFFF; font-size: 12px; font-weight: 700; text-decoration: none; padding: 8px 18px; border-radius: 6px; letter-spacing: 0.5px;">VIEW ARTWORK &rarr;</a>
+        </div>` : ''}
+      </div>
 
-      <div class="field-label">Collector Name</div>
-      <div class="field-value">${collectorName} ${collectorUid ? '<span style="color:#D4AF37; font-size:12px;">(Verified Member)</span>' : '<span style="color:#8A857C; font-size:12px;">(Guest)</span>'}</div>
+      <!-- 2. COLLECTOR DETAILS -->
+      <div class="section-title" style="margin-top: 24px;">Collector Details</div>
+      <table style="width: 100%; border-collapse: collapse; margin-bottom: 8px;">
+        <tr style="border-bottom: 1px solid #F0ECE4;">
+          <td style="padding: 10px 0; font-size: 14px; color: #8A857C; font-weight: 600;">Collector Name</td>
+          <td style="padding: 10px 0; font-size: 14px; color: #17202A; font-weight: 700; text-align: right;">
+            ${collectorName} ${collectorUid ? '<span class="badge-verified">Verified Member</span>' : '<span class="badge-guest">Guest Collector</span>'}
+          </td>
+        </tr>
+        <tr style="border-bottom: 1px solid #F0ECE4;">
+          <td style="padding: 10px 0; font-size: 14px; color: #8A857C; font-weight: 600;">Contact Email</td>
+          <td style="padding: 10px 0; font-size: 14px; font-weight: 600; text-align: right;">
+            <a href="mailto:${collectorEmail}" style="color: #17202A; text-decoration: underline;">${collectorEmail}</a>
+          </td>
+        </tr>
+        ${collectorPhone ? `
+        <tr style="border-bottom: 1px solid #F0ECE4;">
+          <td style="padding: 10px 0; font-size: 14px; color: #8A857C; font-weight: 600;">Telephone / WhatsApp</td>
+          <td style="padding: 10px 0; font-size: 14px; font-weight: 600; text-align: right;">
+            <a href="tel:${collectorPhone}" style="color: #17202A; text-decoration: none;">${collectorPhone}</a>
+          </td>
+        </tr>
+        ` : ''}
+      </table>
 
-      <div class="field-label">Contact Email</div>
-      <div class="field-value"><a href="mailto:${collectorEmail}">${collectorEmail}</a></div>
-
-      ${collectorPhone ? `
-      <div class="field-label">Telephone / WhatsApp</div>
-      <div class="field-value"><a href="tel:${collectorPhone}">${collectorPhone}</a></div>
-      ` : ''}
-
-      <div class="field-label">Enquiry Reference ID</div>
-      <div class="field-value" style="font-family: monospace; font-size: 13px; color: #666;">${enquiryId}</div>
-
-      <div class="field-label">Collector Message</div>
+      <!-- 3. COLLECTOR MESSAGE -->
+      <div class="section-title" style="margin-top: 24px;">Collector Message</div>
       <div class="message-box">${message}</div>
+
+      <!-- 4. ENQUIRY REFERENCE -->
+      <div class="ref-box">
+        <span style="font-weight: 700; color: #17202A;">ENQUIRY REFERENCE ID:</span> ${enquiryId}
+      </div>
+
+      <!-- 5. QUICK ACTIONS -->
+      <div class="btn-row">
+        <a href="mailto:${collectorEmail}?subject=${replyMailtoSubject}" class="btn-primary">✉️ REPLY TO COLLECTOR</a>
+        ${artworkUrl ? `<a href="${artworkUrl}" target="_blank" class="btn-secondary">VIEW ARTWORK &rarr;</a>` : ''}
+      </div>
     </div>
+    
+    <!-- 6. FOOTER -->
     <div class="footer">
       Primo Art Gallery &bull; Curatorial &amp; Acquisition Desk &bull; New Delhi, India
     </div>
@@ -259,12 +427,32 @@ async function sendArtworkEnquiryEmail(enquiryData) {
   const fromEmail = process.env.RESEND_FROM_EMAIL || "Primo Art Gallery <onboarding@resend.dev>";
   const galleryEmail = process.env.GALLERY_CONTACT_EMAIL || "contact@primoartgallery.com";
 
+  // Try to resolve authoritative product metadata from WooCommerce
+  let authoritative = null;
+  if (enquiryData.artworkId) {
+    authoritative = await resolveAuthoritativeArtwork(enquiryData.artworkId).catch(() => null);
+  }
+
+  const enrichedData = {
+    ...enquiryData,
+    artworkTitle: authoritative?.title || enquiryData.artworkTitle || `Artwork #${enquiryData.artworkId}`,
+    artistName: authoritative?.artist || enquiryData.artistName || null,
+    artworkImage: authoritative?.image || enquiryData.artworkImage || null,
+    artworkUrl: authoritative?.permalink || enquiryData.artworkUrl || null,
+  };
+
   if (!apiKey || apiKey.trim() === "") {
     console.log(`[EmailService] ------------------------------------------------------------`);
     console.log(`[EmailService] ✉️  DEV MODE ENQUIRY DISPATCH`);
     console.log(`[EmailService]     To Gallery    : ${galleryEmail}`);
-    console.log(`[EmailService]     Artwork       : ${enquiryData.artworkTitle} (#${enquiryData.artworkId})`);
-    console.log(`[EmailService]     From Collector: ${enquiryData.collectorName} <${enquiryData.collectorEmail}>`);
+    console.log(`[EmailService]     Artwork       : ${enrichedData.artworkTitle} (#${enrichedData.artworkId})`);
+    if (enrichedData.artistName) {
+      console.log(`[EmailService]     Artist        : ${enrichedData.artistName}`);
+    }
+    if (enrichedData.artworkUrl) {
+      console.log(`[EmailService]     Permalink     : ${enrichedData.artworkUrl}`);
+    }
+    console.log(`[EmailService]     From Collector: ${enrichedData.collectorName} <${enrichedData.collectorEmail}>`);
     console.log(`[EmailService] ------------------------------------------------------------`);
     return { success: true, mode: "local_dev" };
   }
@@ -279,10 +467,10 @@ async function sendArtworkEnquiryEmail(enquiryData) {
       body: JSON.stringify({
         from: fromEmail,
         to: [galleryEmail],
-        reply_to: enquiryData.collectorEmail,
-        subject: `[Acquisition Enquiry] ${enquiryData.artworkTitle} — ${enquiryData.collectorName}`,
-        html: buildArtworkEnquiryEmailHtml(enquiryData),
-        text: `New enquiry for "${enquiryData.artworkTitle}" (#${enquiryData.artworkId}) from ${enquiryData.collectorName} (${enquiryData.collectorEmail}, ${enquiryData.collectorPhone || "No phone"}):\n\n${enquiryData.message}`,
+        reply_to: enrichedData.collectorEmail,
+        subject: `🎨 New Artwork Enquiry — ${enrichedData.artworkTitle} | Item #${enrichedData.artworkId}`,
+        html: buildArtworkEnquiryEmailHtml(enrichedData),
+        text: `🎨 NEW ARTWORK ENQUIRY\nPrimo Art Gallery — Acquisition Advisory Desk\n\nARTWORK DETAILS:\n• Title: ${enrichedData.artworkTitle}\n${enrichedData.artistName ? `• Artist: ${enrichedData.artistName}\n` : ''}• Item ID: #${enrichedData.artworkId}\n${enrichedData.artworkUrl ? `• Direct Permalink: ${enrichedData.artworkUrl}\n` : ''}\nCOLLECTOR DETAILS:\n• Name: ${enrichedData.collectorName} (${enrichedData.collectorUid ? 'Verified Member' : 'Guest Collector'})\n• Email: ${enrichedData.collectorEmail}\n• Phone: ${enrichedData.collectorPhone || 'Not provided'}\n• Reference ID: ${enrichedData.enquiryId}\n\nCOLLECTOR MESSAGE:\n${enrichedData.message}\n\n---\nPrimo Art Gallery · Curatorial & Acquisition Desk · New Delhi, India`,
       }),
     });
 
