@@ -95,8 +95,10 @@ async function getOrCreateUserByEmail(email, extraData = {}) {
   const cleanEmail = String(email).trim().toLowerCase();
 
   if (!isMock && auth) {
+    console.log(`[FirebaseAdmin] getOrCreateUserByEmail START (project: ${process.env.FIREBASE_PROJECT_ID || "unknown"})`);
     try {
       const existingUser = await auth.getUserByEmail(cleanEmail);
+      console.log(`[FirebaseAdmin] getUserByEmail SUCCESS (uid: ${existingUser.uid})`);
       if (!existingUser.emailVerified) {
         await auth.updateUser(existingUser.uid, { emailVerified: true });
       }
@@ -109,21 +111,29 @@ async function getOrCreateUserByEmail(email, extraData = {}) {
         createdAt: existingUser.metadata?.creationTime || new Date().toISOString(),
       };
     } catch (err) {
+      console.warn(`[FirebaseAdmin] getUserByEmail ERROR: name=${err.name}, code=${err.code}, message=${err.message}`);
       if (err.code === "auth/user-not-found") {
-        const newUser = await auth.createUser({
-          email: cleanEmail,
-          emailVerified: true,
-          displayName: extraData.displayName || cleanEmail.split("@")[0],
-          photoURL: extraData.photoURL || null,
-        });
-        return {
-          uid: newUser.uid,
-          email: newUser.email,
-          displayName: newUser.displayName,
-          photoURL: newUser.photoURL,
-          emailVerified: true,
-          createdAt: newUser.metadata?.creationTime || new Date().toISOString(),
-        };
+        console.log(`[FirebaseAdmin] createUser START`);
+        try {
+          const newUser = await auth.createUser({
+            email: cleanEmail,
+            emailVerified: true,
+            displayName: extraData.displayName || cleanEmail.split("@")[0],
+            photoURL: extraData.photoURL || null,
+          });
+          console.log(`[FirebaseAdmin] createUser SUCCESS (uid: ${newUser.uid})`);
+          return {
+            uid: newUser.uid,
+            email: newUser.email,
+            displayName: newUser.displayName,
+            photoURL: newUser.photoURL,
+            emailVerified: true,
+            createdAt: newUser.metadata?.creationTime || new Date().toISOString(),
+          };
+        } catch (createErr) {
+          console.error(`[FirebaseAdmin] createUser ERROR: name=${createErr.name}, code=${createErr.code}, message=${createErr.message}`);
+          throw createErr;
+        }
       }
       throw err;
     }
@@ -162,7 +172,15 @@ async function createCustomTokenForUser(uid, claims = {}) {
   const { auth, isMock } = initFirebaseAdmin();
 
   if (!isMock && auth) {
-    return auth.createCustomToken(uid, claims);
+    console.log(`[FirebaseAdmin] createCustomToken START (uid: ${uid})`);
+    try {
+      const token = await auth.createCustomToken(uid, claims);
+      console.log(`[FirebaseAdmin] createCustomToken SUCCESS`);
+      return token;
+    } catch (tokenErr) {
+      console.error(`[FirebaseAdmin] createCustomToken ERROR: name=${tokenErr.name}, code=${tokenErr.code}, message=${tokenErr.message}`);
+      throw tokenErr;
+    }
   }
 
   // Deterministic custom token structure for offline/development

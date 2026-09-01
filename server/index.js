@@ -289,8 +289,11 @@ app.post(["/api/auth/verify-otp", "/api/api/auth/verify-otp", "/auth/verify-otp"
       });
     }
 
+    console.log("[Auth API] OTP HASH VERIFIED");
+
     // OTP is valid! Immediately invalidate it (single-use guarantee)
     await persistentAuthStore.invalidateOtpSession(email);
+    console.log("[Auth API] OTP SESSION INVALIDATED");
 
     // Optional registration payload (password, fullName, phone)
     const rawPassword = req.body?.password;
@@ -303,7 +306,9 @@ app.post(["/api/auth/verify-otp", "/api/api/auth/verify-otp", "/auth/verify-otp"
     }
 
     // Resolve or create canonical user via Firebase Admin Identity Authority
+    console.log("[Auth API] FIREBASE USER RESOLUTION START");
     const user = await firebaseAdmin.getOrCreateUserByEmail(email, extraData);
+    console.log(`[Auth API] FIREBASE USER RESOLUTION SUCCESS (uid: ${user.uid})`);
 
     // If password provided during registration, set it securely in Firebase Auth (scrypt)
     if (rawPassword && typeof rawPassword === "string" && rawPassword.length >= 8) {
@@ -315,9 +320,11 @@ app.post(["/api/auth/verify-otp", "/api/api/auth/verify-otp", "/auth/verify-otp"
     }
 
     // Mint Firebase Custom Token
+    console.log("[Auth API] CUSTOM TOKEN GENERATION START");
     const customToken = await firebaseAdmin.createCustomTokenForUser(user.uid, {
       authMethod: "email_otp",
     });
+    console.log("[Auth API] CUSTOM TOKEN GENERATION SUCCESS");
 
     const collectorProfile = {
       id: user.uid,
@@ -337,13 +344,20 @@ app.post(["/api/auth/verify-otp", "/api/api/auth/verify-otp", "/auth/verify-otp"
       date_created: user.createdAt,
     };
 
+    console.log("[Auth API] VERIFY OTP COMPLETE");
+
     return res.json({
       success: true,
       customToken,
       user: collectorProfile,
     });
   } catch (err) {
-    console.error("[Auth API] verify-otp error:", err.message);
+    console.error("[Auth API] verify-otp ERROR DETAILS:", {
+      name: err.name,
+      code: err.code,
+      message: err.message,
+      stack: err.stack ? err.stack.split("\n").slice(0, 3).join(" | ") : undefined,
+    });
     return res.status(500).json({ error: "Failed to verify code. Please try again." });
   }
 });
