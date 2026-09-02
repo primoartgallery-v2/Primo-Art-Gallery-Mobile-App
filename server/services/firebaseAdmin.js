@@ -424,8 +424,51 @@ async function verifyPassword(email, password) {
 }
 
 /**
+ * Retrieves the raw Service Account private key PEM string if available.
+ * Never logs or exposes the key.
+ */
+function getServiceAccountPrivateKey() {
+  if (process.env.FIREBASE_PRIVATE_KEY) {
+    return process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n");
+  }
+  const serviceAccountPath = path.join(__dirname, "..", "serviceAccountKey.json");
+  if (fs.existsSync(serviceAccountPath)) {
+    try {
+      const serviceAccount = require(serviceAccountPath);
+      if (serviceAccount && serviceAccount.private_key) {
+        return serviceAccount.private_key.replace(/\\n/g, "\n");
+      }
+    } catch {}
+  }
+  return null;
+}
+
+/**
+ * Retrieves the Service Account client email if available.
+ */
+function getServiceAccountClientEmail() {
+  if (process.env.FIREBASE_CLIENT_EMAIL) {
+    return process.env.FIREBASE_CLIENT_EMAIL.trim();
+  }
+  const serviceAccountPath = path.join(__dirname, "..", "serviceAccountKey.json");
+  if (fs.existsSync(serviceAccountPath)) {
+    try {
+      const serviceAccount = require(serviceAccountPath);
+      if (serviceAccount && serviceAccount.client_email) {
+        return serviceAccount.client_email.trim();
+      }
+    } catch {}
+  }
+  return null;
+}
+
+/**
  * Verifies an incoming Bearer auth token from the mobile client.
  * Derives canonical authenticated UID without trusting client parameters.
+ * Supports:
+ * 1. Live Firebase ID Tokens (via auth.verifyIdToken)
+ * 2. Live Firebase Custom Tokens (via RS256 signature & strict claims verification against service account key)
+ * 3. Offline / Mock JWT Tokens (via HS256 HMAC-SHA256 signature verification with JWT_SECRET)
  */
 async function verifyAuthToken(token) {
   if (!token || typeof token !== "string") {
@@ -437,7 +480,7 @@ async function verifyAuthToken(token) {
 
   const { auth, isMock } = initFirebaseAdmin();
 
-  // Try live Firebase verifyIdToken if active
+  // 1. Try live Firebase verifyIdToken if active
   if (!isMock && auth) {
     try {
       const decoded = await auth.verifyIdToken(cleanToken);
@@ -449,11 +492,11 @@ async function verifyAuthToken(token) {
         };
       }
     } catch {
-      // If not standard ID token, try JWT custom token fallback below
+      // If not standard ID token, try RS256 Custom Token / HS256 verification below
     }
   }
 
-  // Verify HMAC / deterministic JWT for local/custom token
+  // 2. Parse and validate JWT structure
   try {
     const parts = cleanToken.split(".");
     if (parts.length !== 3) return null;
@@ -461,35 +504,116 @@ async function verifyAuthToken(token) {
     const [headerB64, payloadB64, signature] = parts;
     if (!headerB64 || !payloadB64 || !signature) return null;
 
-    const expectedSig = crypto
-      .createHmac("sha256", process.env.JWT_SECRET || "primo_jwt_secret_key_2026")
-      .update(`${headerB64}.${payloadB64}`)
-      .digest("base64url");
+    let header, payload;
+    try {
+      header = JSON.parse(Buffer.from(headerB64, "base64url").toString("utf8"));
+      payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
+    } catch {
+      return null;
+    }
 
-    const sigBuf = Buffer.from(signature);
-    const expectedBuf = Buffer.from(expectedSig);
+    if (!header || !payload || typeof header !== "object" || typeof payload !== "object") {
+      return null;
+    }
 
-    if (sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf)) {
-      const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
-      if (payload.exp && Math.floor(Date.now() / 1000) > payload.exp) {
-        return null; // Expired
-      }
-      if (!payload || (!payload.uid && !payload.sub)) {
+    // 2A. RS256 Firebase Custom Token verification (Strict Claim Validation)
+    if (header.alg === "RS256") {
+      const privateKeyPem = getServiceAccountPrivateKey();
+      const expectedIssuer = getServiceAccountClientEmail();
+
+      // If service account credentials or issuer are unconfigured, fail closed
+      if (!privateKeyPem || !expectedIssuer) {
         return null;
       }
-      return {
-        uid: payload.uid || payload.sub,
-        email: payload.email || "",
-        claims: payload.claims || {},
-      };
+
+      // Strict Issuer Validation: payload.iss must exist and match expected service account email exactly
+      if (!payload.iss || typeof payload.iss !== "string" || payload.iss.trim() !== expectedIssuer) {
+        return null;
+      }
+
+      // Strict Audience Validation: payload.aud must exist and match Firebase Identity Toolkit audience exactly
+      const expectedAud = "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit";
+      if (!payload.aud || typeof payload.aud !== "string" || payload.aud.trim() !== expectedAud) {
+        return null;
+      }
+
+      // Strict Expiration Validation: payload.exp must exist, be a valid number, and not be expired
+      if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) {
+        return null;
+      }
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      if (nowSeconds > payload.exp) {
+        return null; // Expired
+      }
+
+      // Strict Issued-At Validation: payload.iat must exist, be a valid number, and not be > 5 min in future
+      if (typeof payload.iat !== "number" || !Number.isFinite(payload.iat)) {
+        return null;
+      }
+      if (nowSeconds < (payload.iat - 300)) {
+        return null; // Clock skew protection
+      }
+
+      // Strict UID Validation: payload.uid must exist, be a non-empty string.
+      // NEVER use payload.sub as a UID fallback (sub is the service account email in Custom Tokens).
+      if (!payload.uid || typeof payload.uid !== "string" || payload.uid.trim() === "") {
+        return null;
+      }
+
+      // Cryptographic Signature Verification
+      try {
+        const publicKey = crypto.createPublicKey(privateKeyPem);
+        const verifier = crypto.createVerify("RSA-SHA256");
+        verifier.update(`${headerB64}.${payloadB64}`);
+        const isValid = verifier.verify(publicKey, Buffer.from(signature, "base64url"));
+
+        if (!isValid) {
+          return null;
+        }
+
+        return {
+          uid: payload.uid.trim(),
+          email: typeof payload.email === "string" ? payload.email.trim() : (typeof payload.claims?.email === "string" ? payload.claims.email.trim() : ""),
+          claims: (payload.claims && typeof payload.claims === "object") ? payload.claims : {},
+        };
+      } catch {
+        return null;
+      }
+    }
+
+    // 2B. HS256 HMAC Token verification (offline/mock development & test suite)
+    if (header.alg === "HS256" || !header.alg) {
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      if (typeof payload.exp === "number" && nowSeconds > payload.exp) {
+        return null; // Expired
+      }
+
+      const uid = payload.uid || payload.sub;
+      if (!uid || typeof uid !== "string" || uid.trim() === "") {
+        return null;
+      }
+
+      const expectedSig = crypto
+        .createHmac("sha256", process.env.JWT_SECRET || "primo_jwt_secret_key_2026")
+        .update(`${headerB64}.${payloadB64}`)
+        .digest("base64url");
+
+      const sigBuf = Buffer.from(signature);
+      const expectedBuf = Buffer.from(expectedSig);
+
+      if (sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+        return {
+          uid: String(uid).trim(),
+          email: typeof payload.email === "string" ? payload.email.trim() : "",
+          claims: (payload.claims && typeof payload.claims === "object") ? payload.claims : {},
+        };
+      }
     }
 
     return null;
   } catch {
     return null;
   }
-
-  return null;
 }
 
 module.exports = {
