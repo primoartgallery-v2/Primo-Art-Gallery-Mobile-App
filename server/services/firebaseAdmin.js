@@ -87,6 +87,16 @@ function generateDeterministicUid(email) {
   return `primo_usr_${hash.substring(0, 20)}`;
 }
 
+function isValidHttpUrl(string) {
+  if (!string || typeof string !== "string" || string.trim() === "") return false;
+  try {
+    const parsed = new URL(string.trim());
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Gets or creates a canonical Firebase user by verified email.
  */
@@ -106,7 +116,7 @@ async function getOrCreateUserByEmail(email, extraData = {}) {
         uid: existingUser.uid,
         email: existingUser.email,
         displayName: existingUser.displayName || extraData.displayName || cleanEmail.split("@")[0],
-        photoURL: existingUser.photoURL || extraData.photoURL || null,
+        photoURL: existingUser.photoURL || (isValidHttpUrl(extraData.photoURL) ? extraData.photoURL.trim() : null),
         emailVerified: true,
         createdAt: existingUser.metadata?.creationTime || new Date().toISOString(),
       };
@@ -115,18 +125,27 @@ async function getOrCreateUserByEmail(email, extraData = {}) {
       if (err.code === "auth/user-not-found") {
         console.log(`[FirebaseAdmin] createUser START`);
         try {
-          const newUser = await auth.createUser({
+          const createUserData = {
             email: cleanEmail,
             emailVerified: true,
-            displayName: extraData.displayName || cleanEmail.split("@")[0],
-            photoURL: extraData.photoURL || null,
-          });
+          };
+
+          const displayName = String(extraData.displayName || cleanEmail.split("@")[0] || "").trim();
+          if (displayName) {
+            createUserData.displayName = displayName;
+          }
+
+          if (isValidHttpUrl(extraData.photoURL)) {
+            createUserData.photoURL = extraData.photoURL.trim();
+          }
+
+          const newUser = await auth.createUser(createUserData);
           console.log(`[FirebaseAdmin] createUser SUCCESS (uid: ${newUser.uid})`);
           return {
             uid: newUser.uid,
             email: newUser.email,
-            displayName: newUser.displayName,
-            photoURL: newUser.photoURL,
+            displayName: newUser.displayName || displayName,
+            photoURL: newUser.photoURL || (isValidHttpUrl(extraData.photoURL) ? extraData.photoURL.trim() : null),
             emailVerified: true,
             createdAt: newUser.metadata?.creationTime || new Date().toISOString(),
           };
