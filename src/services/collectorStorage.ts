@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { WooCommerceProduct } from "./woocommerce";
+import { getIdToken, saveSessionCredentials, clearSessionCredentials } from "./secureStore";
 
 export const AUTH_TOKEN_KEY = "@primo_auth_token";
 export const PENDING_WISHLIST_SYNC_PREFIX = "@primo_pending_wishlist_sync_";
@@ -9,28 +10,20 @@ export const GUEST_WISHLIST_KEY = "@primo_gallery_wishlist_guest";
 import { API_BASE_URL } from "@/constants/apiConfig";
 
 /**
- * Gets the stored authentication token.
+ * Gets the stored authentication token from hardware-backed SecureStore.
  */
 export async function getAuthToken(): Promise<string | null> {
-  try {
-    return await AsyncStorage.getItem(AUTH_TOKEN_KEY);
-  } catch {
-    return null;
-  }
+  return getIdToken();
 }
 
 /**
- * Stores the authentication token.
+ * Stores or clears the authentication token in hardware-backed SecureStore.
  */
 export async function setAuthToken(token: string | null): Promise<void> {
-  try {
-    if (token) {
-      await AsyncStorage.setItem(AUTH_TOKEN_KEY, token);
-    } else {
-      await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
-    }
-  } catch (err) {
-    console.warn("[CollectorStorage] setAuthToken notice:", err);
+  if (token) {
+    await saveSessionCredentials({ idToken: token });
+  } else {
+    await clearSessionCredentials();
   }
 }
 
@@ -64,19 +57,17 @@ export function deduplicateProducts(products: WooCommerceProduct[]): WooCommerce
   return result;
 }
 
+import { authenticatedFetch } from "./sessionManager";
+
 /**
  * Fetches user's wishlist from Cloud Firestore via secure backend proxy.
  */
 export async function fetchCloudWishlist(): Promise<WooCommerceProduct[] | null> {
-  const token = await getAuthToken();
-  if (!token) return null;
-
   try {
-    const res = await fetch(`${API_BASE_URL}/api/collector/wishlist`, {
+    const res = await authenticatedFetch(`${API_BASE_URL}/api/collector/wishlist`, {
       method: "GET",
       headers: {
         Accept: "application/json",
-        Authorization: `Bearer ${token}`,
       },
     });
 
@@ -106,21 +97,13 @@ export async function syncWishlistToCloud(
   if (!userId) return true; // Guest does not sync to cloud
 
   const cleanItems = deduplicateProducts(items);
-  const token = await getAuthToken();
-
-  if (!token) {
-    // Save to pending queue until token / connectivity is available
-    await AsyncStorage.setItem(getPendingWishlistSyncKey(userId), JSON.stringify(cleanItems));
-    return false;
-  }
 
   try {
-    const res = await fetch(`${API_BASE_URL}/api/collector/wishlist`, {
+    const res = await authenticatedFetch(`${API_BASE_URL}/api/collector/wishlist`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
-        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ items: cleanItems }),
     });

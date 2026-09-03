@@ -108,6 +108,7 @@ export default function PaintingDetailScreen() {
   const [enquiryError, setEnquiryError] = useState<string | null>(null);
   const [enquirySuccess, setEnquirySuccess] = useState(false);
   const [enquiryRefId, setEnquiryRefId] = useState<string | null>(null);
+  const enquiryScrollRef = useRef<ScrollView>(null);
 
   // Pre-fill collector information when modal opens
   useEffect(() => {
@@ -239,14 +240,17 @@ export default function PaintingDetailScreen() {
 
     setIsSubmittingEnquiry(true);
     try {
-      const res = await submitArtworkEnquiry({
-        artworkId: product.id,
-        artworkTitle: product.name,
-        collectorName: cleanName,
-        collectorEmail: cleanEmail,
-        collectorPhone: cleanPhone || undefined,
-        message: cleanMsg,
-      });
+      const res = await submitArtworkEnquiry(
+        {
+          artworkId: product.id,
+          artworkTitle: product.name,
+          collectorName: cleanName,
+          collectorEmail: cleanEmail,
+          collectorPhone: cleanPhone || undefined,
+          message: cleanMsg,
+        },
+        user?.id
+      );
 
       if (res.success) {
         try {
@@ -529,7 +533,7 @@ export default function PaintingDetailScreen() {
         onRequestClose={resetEnquiryModal}
       >
         <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
           style={styles.modalOverlay}
         >
           <Pressable style={styles.modalBackdrop} onPress={resetEnquiryModal} />
@@ -616,9 +620,11 @@ export default function PaintingDetailScreen() {
             ) : (
               /* ENQUIRY FORM */
               <ScrollView
+                ref={enquiryScrollRef}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
-                contentContainerStyle={styles.enquiryFormContent}
+                automaticallyAdjustKeyboardInsets={true}
+                contentContainerStyle={[styles.enquiryFormContent, { paddingBottom: 48 }]}
               >
                 <View style={styles.enquiryHeader}>
                   <View>
@@ -690,6 +696,11 @@ export default function PaintingDetailScreen() {
                     onChangeText={setEnquiryName}
                     autoCapitalize="words"
                     editable={!isSubmittingEnquiry}
+                    onFocus={() => {
+                      setTimeout(() => {
+                        enquiryScrollRef.current?.scrollTo({ y: 50, animated: true });
+                      }, 120);
+                    }}
                   />
                 </View>
 
@@ -709,6 +720,11 @@ export default function PaintingDetailScreen() {
                     keyboardType="email-address"
                     autoCapitalize="none"
                     editable={!isSubmittingEnquiry}
+                    onFocus={() => {
+                      setTimeout(() => {
+                        enquiryScrollRef.current?.scrollTo({ y: 120, animated: true });
+                      }, 120);
+                    }}
                   />
                 </View>
 
@@ -727,6 +743,11 @@ export default function PaintingDetailScreen() {
                     onChangeText={setEnquiryPhone}
                     keyboardType="phone-pad"
                     editable={!isSubmittingEnquiry}
+                    onFocus={() => {
+                      setTimeout(() => {
+                        enquiryScrollRef.current?.scrollTo({ y: 190, animated: true });
+                      }, 120);
+                    }}
                   />
                 </View>
 
@@ -747,6 +768,14 @@ export default function PaintingDetailScreen() {
                     numberOfLines={3}
                     textAlignVertical="top"
                     editable={!isSubmittingEnquiry}
+                    onFocus={() => {
+                      setTimeout(() => {
+                        enquiryScrollRef.current?.scrollToEnd({ animated: true });
+                      }, 150);
+                    }}
+                    onContentSizeChange={() => {
+                      enquiryScrollRef.current?.scrollToEnd({ animated: false });
+                    }}
                   />
                 </View>
 

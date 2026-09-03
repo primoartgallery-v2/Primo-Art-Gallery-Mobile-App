@@ -1,9 +1,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getFirebaseAuth, getFirebaseAuthModule } from "./firebase";
-import { getAuthToken, setAuthToken } from "./collectorStorage";
+import { getAuthToken } from "./collectorStorage";
 import { mergeGuestRecentlyViewed } from "./recentlyViewedStorage";
 import { mergeGuestSavedArtists } from "./savedArtistsStorage";
 import { syncGuestAddressesToCloud, syncPendingAddressesToCloud } from "./address";
+import { exchangeCustomTokenForSession, authenticatedFetch } from "./sessionManager";
+import { clearSessionCredentials, migrateLegacyAsyncStorageTokens } from "./secureStore";
+import { clearStoredEnquiries } from "./enquiryService";
 
 // Storage keys
 export const AUTH_USER_KEY = "@primo_auth_user";
@@ -188,7 +191,9 @@ export async function verifyEmailOtp(
 
   // Save active user session
   await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
-  await setAuthToken(customToken);
+  if (customToken) {
+    await exchangeCustomTokenForSession(customToken);
+  }
 
   // Run non-destructive legacy data migration and guest merges
   await checkAndMigrateLegacyData(user.id, user.email);
@@ -270,7 +275,9 @@ export async function loginWithEmailPassword(
 
   // Save active user session
   await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
-  await setAuthToken(customToken);
+  if (customToken) {
+    await exchangeCustomTokenForSession(customToken);
+  }
 
   // Run non-destructive legacy data migration and guest merges
   await checkAndMigrateLegacyData(user.id, user.email);
@@ -359,7 +366,9 @@ export async function resetPasswordWithOtp(
 
   // Save active user session
   await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
-  await setAuthToken(customToken);
+  if (customToken) {
+    await exchangeCustomTokenForSession(customToken);
+  }
 
   // Run non-destructive legacy data migration and guest merges
   await checkAndMigrateLegacyData(user.id, user.email);
@@ -405,7 +414,9 @@ export async function signInWithGoogle(
 
   // Save active user session
   await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
-  await setAuthToken(customToken);
+  if (customToken) {
+    await exchangeCustomTokenForSession(customToken);
+  }
 
   // Run non-destructive legacy data migration and guest merges
   await checkAndMigrateLegacyData(user.id, user.email);
@@ -474,15 +485,11 @@ export async function updateStoredUserProfile(
  * Fetches collector profile customizations from Cloud Firestore.
  */
 export async function getCloudProfile(): Promise<UpdateProfileParams | null> {
-  const token = await getAuthToken();
-  if (!token) return null;
-
   try {
-    const res = await fetch(`${API_BASE_URL}/api/collector/profile`, {
+    const res = await authenticatedFetch(`${API_BASE_URL}/api/collector/profile`, {
       method: "GET",
       headers: {
         Accept: "application/json",
-        Authorization: `Bearer ${token}`,
       },
     });
 
@@ -501,16 +508,12 @@ export async function getCloudProfile(): Promise<UpdateProfileParams | null> {
  * Persists collector profile customizations to Cloud Firestore.
  */
 export async function syncProfileToCloud(profile: UpdateProfileParams): Promise<boolean> {
-  const token = await getAuthToken();
-  if (!token) return false;
-
   try {
-    const res = await fetch(`${API_BASE_URL}/api/collector/profile`, {
+    const res = await authenticatedFetch(`${API_BASE_URL}/api/collector/profile`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
-        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ profile }),
     });
@@ -522,7 +525,7 @@ export async function syncProfileToCloud(profile: UpdateProfileParams): Promise<
 }
 
 /**
- * Clears active user session on logout.
+ * Clears active user session and wipes all credentials on logout.
  */
 export async function logoutUser(): Promise<void> {
   try {
@@ -532,8 +535,16 @@ export async function logoutUser(): Promise<void> {
       await fbAuthModule.signOut(auth).catch(() => {});
     }
   } catch {}
+
+  try {
+    const user = await getStoredUser();
+    if (user?.id) {
+      await clearStoredEnquiries(user.id);
+    }
+  } catch {}
+
+  await clearSessionCredentials();
   await AsyncStorage.removeItem(AUTH_USER_KEY);
-  await setAuthToken(null);
 }
 
 /**

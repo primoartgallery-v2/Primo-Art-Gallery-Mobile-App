@@ -185,41 +185,16 @@ async function getOrCreateUserByEmail(email, extraData = {}) {
 }
 
 /**
- * Creates a Firebase Custom Token for a canonical UID.
+ * Creates a Firebase Custom Token for a canonical UID using official Firebase Admin SDK.
  */
 async function createCustomTokenForUser(uid, claims = {}) {
   const { auth, isMock } = initFirebaseAdmin();
 
   if (!isMock && auth) {
-    console.log(`[FirebaseAdmin] createCustomToken START (uid: ${uid})`);
-    try {
-      const token = await auth.createCustomToken(uid, claims);
-      console.log(`[FirebaseAdmin] createCustomToken SUCCESS`);
-      return token;
-    } catch (tokenErr) {
-      console.error(`[FirebaseAdmin] createCustomToken ERROR: name=${tokenErr.name}, code=${tokenErr.code}, message=${tokenErr.message}`);
-      throw tokenErr;
-    }
+    return await auth.createCustomToken(uid, claims);
   }
 
-  // Deterministic custom token structure for offline/development
-  const payload = {
-    uid,
-    claims: { ...claims, authMethod: claims.authMethod || "primo_secure_otp" },
-    iss: "primo-gallery-auth-authority",
-    sub: uid,
-    iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + 3600,
-  };
-
-  const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
-  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const signature = crypto
-    .createHmac("sha256", process.env.JWT_SECRET || "primo_jwt_secret_key_2026")
-    .update(`${header}.${body}`)
-    .digest("base64url");
-
-  return `${header}.${body}.${signature}`;
+  throw new Error("Firebase Admin SDK uninitialized: cannot create custom token.");
 }
 
 /**
@@ -233,7 +208,6 @@ async function verifyGoogleIdToken(idToken) {
 
   const { auth, isMock } = initFirebaseAdmin();
 
-  // PRODUCTION / LIVE FIREBASE PATH: Cryptographic verification is strictly required
   if (!isMock && auth) {
     const decoded = await auth.verifyIdToken(idToken);
     if (!decoded || !decoded.email) {
@@ -247,31 +221,7 @@ async function verifyGoogleIdToken(idToken) {
     };
   }
 
-  // Fail closed in production if Firebase Admin is not initialized
-  if (process.env.NODE_ENV === "production") {
-    throw new Error("Google authentication is unavailable in production: Firebase Admin SDK uninitialized.");
-  }
-
-  // ISOLATED LOCAL DEVELOPMENT / TEST MOCK ONLY (NODE_ENV !== 'production' && isMock === true)
-  // Used exclusively for offline unit testing when Firebase credentials are not mounted.
-  try {
-    const parts = idToken.split(".");
-    if (parts.length >= 2) {
-      const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf8"));
-      if (payload && payload.email) {
-        return {
-          email: String(payload.email).trim().toLowerCase(),
-          displayName: payload.name || payload.given_name || "",
-          photoURL: payload.picture || "",
-          googleUid: payload.sub || payload.user_id || `google_${Date.now()}`,
-        };
-      }
-    }
-  } catch (err) {
-    console.error("[FirebaseAdmin] Mock token parse error:", err.message);
-  }
-
-  throw new Error("Invalid or unverified Google credentials.");
+  throw new Error("Google authentication is unavailable: Firebase Admin SDK uninitialized.");
 }
 
 /**
@@ -464,11 +414,8 @@ function getServiceAccountClientEmail() {
 
 /**
  * Verifies an incoming Bearer auth token from the mobile client.
- * Derives canonical authenticated UID without trusting client parameters.
- * Supports:
- * 1. Live Firebase ID Tokens (via auth.verifyIdToken)
- * 2. Live Firebase Custom Tokens (via RS256 signature & strict claims verification against service account key)
- * 3. Offline / Mock JWT Tokens (via HS256 HMAC-SHA256 signature verification with JWT_SECRET)
+ * Strictly verifies genuine Firebase ID tokens using the official Firebase Admin SDK verifyIdToken().
+ * Rejects Firebase Custom Tokens, fabricated HS256 tokens, and expired/tampered tokens.
  */
 async function verifyAuthToken(token) {
   if (!token || typeof token !== "string") {
@@ -480,139 +427,145 @@ async function verifyAuthToken(token) {
 
   const { auth, isMock } = initFirebaseAdmin();
 
-  // 1. Try live Firebase verifyIdToken if active
-  if (!isMock && auth) {
-    try {
-      const decoded = await auth.verifyIdToken(cleanToken);
-      if (decoded && (decoded.uid || decoded.sub)) {
-        return {
-          uid: decoded.uid || decoded.sub,
-          email: decoded.email || "",
-          claims: decoded,
-        };
-      }
-    } catch {
-      // If not standard ID token, try RS256 Custom Token / HS256 verification below
-    }
+  // If live Firebase Admin is not active, fail closed immediately
+  if (isMock || !auth) {
+    return null;
   }
 
-  // 2. Parse and validate JWT structure
   try {
-    const parts = cleanToken.split(".");
-    if (parts.length !== 3) return null;
-
-    const [headerB64, payloadB64, signature] = parts;
-    if (!headerB64 || !payloadB64 || !signature) return null;
-
-    let header, payload;
-    try {
-      header = JSON.parse(Buffer.from(headerB64, "base64url").toString("utf8"));
-      payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
-    } catch {
-      return null;
+    const decoded = await auth.verifyIdToken(cleanToken, true);
+    if (decoded && (decoded.uid || decoded.sub)) {
+      return {
+        uid: decoded.uid || decoded.sub,
+        email: decoded.email || "",
+        claims: decoded,
+      };
     }
-
-    if (!header || !payload || typeof header !== "object" || typeof payload !== "object") {
-      return null;
-    }
-
-    // 2A. RS256 Firebase Custom Token verification (Strict Claim Validation)
-    if (header.alg === "RS256") {
-      const privateKeyPem = getServiceAccountPrivateKey();
-      const expectedIssuer = getServiceAccountClientEmail();
-
-      // If service account credentials or issuer are unconfigured, fail closed
-      if (!privateKeyPem || !expectedIssuer) {
-        return null;
-      }
-
-      // Strict Issuer Validation: payload.iss must exist and match expected service account email exactly
-      if (!payload.iss || typeof payload.iss !== "string" || payload.iss.trim() !== expectedIssuer) {
-        return null;
-      }
-
-      // Strict Audience Validation: payload.aud must exist and match Firebase Identity Toolkit audience exactly
-      const expectedAud = "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit";
-      if (!payload.aud || typeof payload.aud !== "string" || payload.aud.trim() !== expectedAud) {
-        return null;
-      }
-
-      // Strict Expiration Validation: payload.exp must exist, be a valid number, and not be expired
-      if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) {
-        return null;
-      }
-      const nowSeconds = Math.floor(Date.now() / 1000);
-      if (nowSeconds > payload.exp) {
-        return null; // Expired
-      }
-
-      // Strict Issued-At Validation: payload.iat must exist, be a valid number, and not be > 5 min in future
-      if (typeof payload.iat !== "number" || !Number.isFinite(payload.iat)) {
-        return null;
-      }
-      if (nowSeconds < (payload.iat - 300)) {
-        return null; // Clock skew protection
-      }
-
-      // Strict UID Validation: payload.uid must exist, be a non-empty string.
-      // NEVER use payload.sub as a UID fallback (sub is the service account email in Custom Tokens).
-      if (!payload.uid || typeof payload.uid !== "string" || payload.uid.trim() === "") {
-        return null;
-      }
-
-      // Cryptographic Signature Verification
-      try {
-        const publicKey = crypto.createPublicKey(privateKeyPem);
-        const verifier = crypto.createVerify("RSA-SHA256");
-        verifier.update(`${headerB64}.${payloadB64}`);
-        const isValid = verifier.verify(publicKey, Buffer.from(signature, "base64url"));
-
-        if (!isValid) {
-          return null;
-        }
-
-        return {
-          uid: payload.uid.trim(),
-          email: typeof payload.email === "string" ? payload.email.trim() : (typeof payload.claims?.email === "string" ? payload.claims.email.trim() : ""),
-          claims: (payload.claims && typeof payload.claims === "object") ? payload.claims : {},
-        };
-      } catch {
-        return null;
-      }
-    }
-
-    // 2B. HS256 HMAC Token verification (offline/mock development & test suite)
-    if (header.alg === "HS256" || !header.alg) {
-      const nowSeconds = Math.floor(Date.now() / 1000);
-      if (typeof payload.exp === "number" && nowSeconds > payload.exp) {
-        return null; // Expired
-      }
-
-      const uid = payload.uid || payload.sub;
-      if (!uid || typeof uid !== "string" || uid.trim() === "") {
-        return null;
-      }
-
-      const expectedSig = crypto
-        .createHmac("sha256", process.env.JWT_SECRET || "primo_jwt_secret_key_2026")
-        .update(`${headerB64}.${payloadB64}`)
-        .digest("base64url");
-
-      const sigBuf = Buffer.from(signature);
-      const expectedBuf = Buffer.from(expectedSig);
-
-      if (sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf)) {
-        return {
-          uid: String(uid).trim(),
-          email: typeof payload.email === "string" ? payload.email.trim() : "",
-          claims: (payload.claims && typeof payload.claims === "object") ? payload.claims : {},
-        };
-      }
-    }
-
     return null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Exchanges a Firebase Custom Token for authoritative Firebase ID and Refresh Tokens
+ * via Google Identity Toolkit REST API.
+ * Fails closed with 503 if Google service is unreachable, or 401 on invalid token.
+ * Never mints fake/mock tokens.
+ */
+async function exchangeCustomTokenForSession(customToken) {
+  if (!customToken || typeof customToken !== "string" || customToken.trim() === "") {
+    return { success: false, status: 400, code: "INVALID_ARGUMENT", error: "A valid custom token is required." };
+  }
+
+  const cleanToken = customToken.trim();
+  const firebaseApiKey = process.env.FIREBASE_WEB_API_KEY || process.env.FIREBASE_API_KEY || process.env.EXPO_PUBLIC_FIREBASE_API_KEY;
+
+  if (!firebaseApiKey) {
+    return {
+      success: false,
+      status: 503,
+      code: "AUTH_SERVICE_UNAVAILABLE",
+      error: "Authentication service is currently unavailable. Please try again later.",
+    };
+  }
+
+  try {
+    const response = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${firebaseApiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token: cleanToken,
+          returnSecureToken: true,
+        }),
+      }
+    );
+
+    const data = await response.json();
+    if (response.ok && data.idToken) {
+      return {
+        success: true,
+        idToken: data.idToken,
+        refreshToken: data.refreshToken,
+        expiresIn: parseInt(data.expiresIn || "3600", 10),
+        uid: data.localId,
+      };
+    }
+
+    return {
+      success: false,
+      status: 401,
+      code: "INVALID_TOKEN",
+      error: "Invalid or expired custom token.",
+    };
+  } catch (err) {
+    return {
+      success: false,
+      status: 503,
+      code: "AUTH_SERVICE_UNAVAILABLE",
+      error: "Authentication service is currently unavailable. Please try again later.",
+    };
+  }
+}
+
+/**
+ * Refreshes an expired Firebase ID Token using the Refresh Token via Google Secure Token API.
+ * Fails closed with 503 if Google service is unreachable, or 401 on invalid token.
+ * Never accepts or mints fake/mock refresh tokens.
+ */
+async function refreshFirebaseIdToken(refreshToken) {
+  if (!refreshToken || typeof refreshToken !== "string" || refreshToken.trim() === "") {
+    return { success: false, status: 400, code: "INVALID_ARGUMENT", error: "A valid refresh token is required." };
+  }
+
+  const cleanRefreshToken = refreshToken.trim();
+  const firebaseApiKey = process.env.FIREBASE_WEB_API_KEY || process.env.FIREBASE_API_KEY || process.env.EXPO_PUBLIC_FIREBASE_API_KEY;
+
+  if (!firebaseApiKey) {
+    return {
+      success: false,
+      status: 503,
+      code: "AUTH_SERVICE_UNAVAILABLE",
+      error: "Authentication service is currently unavailable. Please try again later.",
+    };
+  }
+
+  try {
+    const response = await fetch(
+      `https://securetoken.googleapis.com/v1/token?key=${firebaseApiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(cleanRefreshToken)}`,
+      }
+    );
+
+    const data = await response.json();
+    if (response.ok && data.id_token) {
+      return {
+        success: true,
+        idToken: data.id_token,
+        refreshToken: data.refresh_token || cleanRefreshToken,
+        expiresIn: parseInt(data.expires_in || "3600", 10),
+        uid: data.user_id,
+      };
+    }
+
+    return {
+      success: false,
+      status: 401,
+      code: "INVALID_TOKEN",
+      error: "Invalid or expired session refresh token.",
+    };
+  } catch (err) {
+    return {
+      success: false,
+      status: 503,
+      code: "AUTH_SERVICE_UNAVAILABLE",
+      error: "Authentication service is currently unavailable. Please try again later.",
+    };
   }
 }
 
@@ -620,6 +573,8 @@ module.exports = {
   initFirebaseAdmin,
   getOrCreateUserByEmail,
   createCustomTokenForUser,
+  exchangeCustomTokenForSession,
+  refreshFirebaseIdToken,
   verifyGoogleIdToken,
   generateDeterministicUid,
   setUserPassword,

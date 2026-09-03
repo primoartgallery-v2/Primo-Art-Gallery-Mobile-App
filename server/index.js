@@ -17,6 +17,9 @@ const pushNotificationService = require("./services/pushNotificationService");
 firebaseAdmin.initFirebaseAdmin();
 
 const app = express();
+// Enable single-hop reverse proxy trust for Render / Cloudflare infrastructure
+app.set("trust proxy", 1);
+
 const PORT = process.env.PORT || 4000;
 const WOOCOMMERCE_URL = (process.env.WOOCOMMERCE_URL || "").replace(/\/$/, "");
 const CONSUMER_KEY = process.env.WOOCOMMERCE_CONSUMER_KEY || "";
@@ -622,6 +625,120 @@ app.post(["/api/auth/google-verify", "/api/api/auth/google-verify", "/auth/googl
   } catch (err) {
     console.error("[Auth API] google-verify error:", err.message);
     return res.status(401).json({ error: "Google authentication verification failed." });
+  }
+});/**
+ * POST /api/auth/session-token
+ * Exchanges a Firebase Custom Token for authoritative Firebase ID & Refresh Tokens.
+ * Rate-limited per IP (Max 10 req/5min, fail-closed) with strict payload validation.
+ */
+app.post("/api/auth/session-token", async (req, res) => {
+  const clientIp = req.ip || req.connection?.remoteAddress || "unknown_ip";
+
+  const rateLimit = await distributedRateLimiter.checkRateLimit({
+    bucket: "auth_session_token",
+    key: clientIp,
+    limit: 10,
+    windowSeconds: 300,
+    failMode: "fail-closed",
+  });
+
+  if (!rateLimit.allowed) {
+    if (rateLimit.error) {
+      return res.status(503).json({
+        error: "Rate limiter service unavailable. Please try again later.",
+        code: "SERVICE_UNAVAILABLE",
+      });
+    }
+    return res.status(429).json({
+      error: `Too many session requests. Please try again in ${rateLimit.resetSeconds} seconds.`,
+      code: "RATE_LIMITED",
+    });
+  }
+
+  const customToken = req.body?.customToken;
+  if (!customToken || typeof customToken !== "string" || customToken.trim().length === 0 || customToken.length > 4096) {
+    return res.status(400).json({ error: "A valid custom token is required.", code: "INVALID_ARGUMENT" });
+  }
+
+  try {
+    const session = await firebaseAdmin.exchangeCustomTokenForSession(customToken);
+    if (!session.success || !session.idToken) {
+      const statusCode = session.status || 401;
+      return res.status(statusCode).json({
+        error: session.error || "Failed to exchange session token.",
+        code: session.code || "INVALID_TOKEN",
+      });
+    }
+
+    return res.json({
+      success: true,
+      idToken: session.idToken,
+      refreshToken: session.refreshToken || null,
+      expiresIn: session.expiresIn || 3600,
+    });
+  } catch {
+    return res.status(503).json({
+      error: "Authentication service is currently unavailable. Please try again later.",
+      code: "AUTH_SERVICE_UNAVAILABLE",
+    });
+  }
+});
+
+/**
+ * POST /api/auth/refresh-token
+ * Refreshes an expired Firebase ID Token using the Refresh Token.
+ * Rate-limited per IP (Max 30 req/5min, fail-closed) with strict payload validation.
+ */
+app.post("/api/auth/refresh-token", async (req, res) => {
+  const clientIp = req.ip || req.connection?.remoteAddress || "unknown_ip";
+
+  const rateLimit = await distributedRateLimiter.checkRateLimit({
+    bucket: "auth_refresh_token",
+    key: clientIp,
+    limit: 30,
+    windowSeconds: 300,
+    failMode: "fail-closed",
+  });
+
+  if (!rateLimit.allowed) {
+    if (rateLimit.error) {
+      return res.status(503).json({
+        error: "Rate limiter service unavailable. Please try again later.",
+        code: "SERVICE_UNAVAILABLE",
+      });
+    }
+    return res.status(429).json({
+      error: `Too many token refresh requests. Please try again in ${rateLimit.resetSeconds} seconds.`,
+      code: "RATE_LIMITED",
+    });
+  }
+
+  const refreshToken = req.body?.refreshToken;
+  if (!refreshToken || typeof refreshToken !== "string" || refreshToken.trim().length === 0 || refreshToken.length > 4096) {
+    return res.status(400).json({ error: "A valid refresh token is required.", code: "INVALID_ARGUMENT" });
+  }
+
+  try {
+    const refreshed = await firebaseAdmin.refreshFirebaseIdToken(refreshToken);
+    if (!refreshed.success || !refreshed.idToken) {
+      const statusCode = refreshed.status || 401;
+      return res.status(statusCode).json({
+        error: refreshed.error || "Invalid or expired session refresh token.",
+        code: refreshed.code || "INVALID_TOKEN",
+      });
+    }
+
+    return res.json({
+      success: true,
+      idToken: refreshed.idToken,
+      refreshToken: refreshed.refreshToken || refreshToken,
+      expiresIn: refreshed.expiresIn || 3600,
+    });
+  } catch {
+    return res.status(503).json({
+      error: "Authentication service is currently unavailable. Please try again later.",
+      code: "AUTH_SERVICE_UNAVAILABLE",
+    });
   }
 });
 

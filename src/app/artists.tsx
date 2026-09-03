@@ -450,7 +450,13 @@ const ArtistCard = React.memo(function ArtistCard({
         ) : null}
       </View>
 
-      <Text style={styles.artistName} numberOfLines={1}>
+      <Text
+        style={[
+          styles.artistName,
+          { color: isDark ? colors.gold : "#252525" },
+        ]}
+        numberOfLines={1}
+      >
         {artist.name}
       </Text>
 

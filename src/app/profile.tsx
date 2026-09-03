@@ -1,9 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { Image as ExpoImage } from "expo-image";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import {
   Alert,
   FlatList,
@@ -19,6 +19,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { AppBottomNav } from "@/components/app-bottom-nav";
 import { AboutContactModal } from "@/components/AboutContactModal";
+import { AcquisitionInquiriesModal } from "@/components/AcquisitionInquiriesModal";
 import { CertificateOfAuthenticityModal } from "@/components/CertificateOfAuthenticityModal";
 import { EditProfileModal } from "@/components/EditProfileModal";
 import { ExhibitionRsvpModal } from "@/components/ExhibitionRsvpModal";
@@ -45,6 +46,12 @@ import {
   getCloudRecentlyViewed,
   type RecentlyViewedItem,
 } from "@/services/recentlyViewedStorage";
+import {
+  getCollectorEnquiries,
+  getStoredEnquiries,
+  type CollectorEnquiryItem,
+} from "@/services/enquiryService";
+import { onSessionExpired } from "@/services/sessionManager";
 import type { WooCommerceProduct } from "@/services/woocommerce";
 
 const AVATAR_ICON_MAP: Record<string, any> = {
@@ -73,8 +80,72 @@ export default function ProfileScreen() {
   const [exhibitionPasses, setExhibitionPasses] = useState<ExhibitionVipPass[]>([]);
   const [selectedPassToView, setSelectedPassToView] = useState<ExhibitionVipPass | null>(null);
   const [myBids, setMyBids] = useState<AuctionBid[]>([]);
+  const [myEnquiries, setMyEnquiries] = useState<CollectorEnquiryItem[]>([]);
+  const [showInquiriesModal, setShowInquiriesModal] = useState(false);
+  const [selectedEnquiryToView, setSelectedEnquiryToView] = useState<CollectorEnquiryItem | null>(null);
+  const [enquiriesLoading, setEnquiriesLoading] = useState(false);
+  const [enquiriesError, setEnquiriesError] = useState<string | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+
+  // Session expiration listener: gracefully prompts re-login if refresh token revoked
+  React.useEffect(() => {
+    const unsubscribe = onSessionExpired((reason) => {
+      Alert.alert(
+        "Session Expired",
+        reason || "Your collector session has expired. Please sign in again.",
+        [
+          {
+            text: "Sign In",
+            onPress: () => {
+              void logout();
+              router.push("/login");
+            },
+          },
+        ]
+      );
+    });
+    return () => unsubscribe();
+  }, [logout, router]);
+
+  const loadEnquiries = useCallback(() => {
+    if (!user?.id) {
+      setMyEnquiries([]);
+      setEnquiriesLoading(false);
+      setEnquiriesError(null);
+      return;
+    }
+
+    // 1. Immediately render cached data from user-scoped storage
+    getStoredEnquiries(user.id)
+      .then((cached) => {
+        if (cached && cached.length > 0) {
+          setMyEnquiries(cached);
+        }
+      })
+      .catch(() => {});
+
+    // 2. Reconcile with cloud in background
+    setEnquiriesLoading(true);
+    setEnquiriesError(null);
+    getCollectorEnquiries(user.id)
+      .then((result) => {
+        if (result.success && result.enquiries) {
+          setMyEnquiries(result.enquiries);
+          setEnquiriesError(null);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        setEnquiriesLoading(false);
+      });
+  }, [user?.id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadEnquiries();
+    }, [loadEnquiries])
+  );
 
   // Load recently viewed artworks and sync cloud collector profile, passes, and auction bids
   React.useEffect(() => {
@@ -176,6 +247,9 @@ export default function ProfileScreen() {
 
   const handleConfirmLogout = async () => {
     setShowSignOutModal(false);
+    setMyEnquiries([]);
+    setEnquiriesError(null);
+    setEnquiriesLoading(false);
     await logout();
   };
 
@@ -259,25 +333,17 @@ export default function ProfileScreen() {
                 style={styles.statBox}
                 onPress={() => {
                   handleAction(() => {
-                    Alert.alert(
-                      "Your Collector Inquiries",
-                      "You have 0 pending physical delivery orders. All previous private curatorial inquiries are tracked via WhatsApp & Email.",
-                      [
-                        {
-                          text: "Contact Curator",
-                          onPress: () =>
-                            Linking.openURL(
-                              `https://wa.me/${GALLERY_CONFIG.whatsappNumber.replace(/[^0-9]/g, "")}?text=Hello%20Primo%20Art%20Gallery,%20I%20would%20like%20to%20inquire%20about%20my%20recent%20acquisition%20order.`
-                            ).catch(() => {}),
-                        },
-                        { text: "OK", style: "cancel" },
-                      ]
-                    );
+                    setSelectedEnquiryToView(null);
+                    setShowInquiriesModal(true);
                   });
                 }}
               >
                 <Ionicons name="cube-outline" size={16} color={colors.gold} style={{ marginBottom: 2 }} />
-                <Text style={[styles.statValue, { color: colors.text }]}>0 Orders</Text>
+                <Text style={[styles.statValue, { color: colors.text }]}>
+                  {enquiriesLoading && myEnquiries.length === 0
+                    ? "Loading..."
+                    : `${myEnquiries.length} ${myEnquiries.length === 1 ? "Enquiry" : "Enquiries"}`}
+                </Text>
                 <Text style={[styles.statLabel, { color: colors.textSecondary }]}>INQUIRIES</Text>
               </Pressable>
 
@@ -380,6 +446,128 @@ export default function ProfileScreen() {
             </View>
           </>
         )}
+
+        {/* ACQUISITION INQUIRIES SECTION */}
+        {myEnquiries.length > 0 ? (
+          <View style={styles.wishlistSection}>
+            <View style={styles.sectionHeaderRow}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Text style={[styles.sectionHeader, { color: colors.gold }]}>ACQUISITION INQUIRIES</Text>
+                <Text
+                  style={[
+                    styles.wishlistCountBadge,
+                    { backgroundColor: colors.goldBadge, color: colors.goldBadgeText },
+                  ]}
+                >
+                  {myEnquiries.length}
+                </Text>
+              </View>
+
+              <Pressable
+                style={styles.viewAllBtn}
+                onPress={() => {
+                  try {
+                    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  } catch {}
+                  setSelectedEnquiryToView(null);
+                  setShowInquiriesModal(true);
+                }}
+              >
+                <Text style={[styles.viewAllText, { color: colors.gold }]}>View All ({myEnquiries.length})</Text>
+                <Ionicons name="chevron-forward" size={14} color={colors.gold} />
+              </Pressable>
+            </View>
+
+            <FlatList
+              horizontal
+              data={myEnquiries}
+              keyExtractor={(item) => item.enquiryId || String(item.artworkId)}
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.wishlistList}
+              renderItem={({ item }) => (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.savedCard,
+                    {
+                      backgroundColor: colors.card,
+                      borderColor: isDark ? "rgba(212, 175, 55, 0.2)" : colors.border,
+                      width: 220,
+                    },
+                    pressed && { transform: [{ scale: 0.97 }], opacity: 0.95 },
+                  ]}
+                  onPress={() => {
+                    try {
+                      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    } catch {}
+                    setSelectedEnquiryToView(item);
+                    setShowInquiriesModal(true);
+                  }}
+                >
+                  <View
+                    style={[
+                      styles.savedCardImageWrap,
+                      {
+                        backgroundColor: isDark ? "#20222C" : "#FAF6EC",
+                        height: 110,
+                        alignItems: "center",
+                        justifyContent: "center",
+                      },
+                    ]}
+                  >
+                    <Ionicons name="cube-outline" size={36} color={colors.gold} />
+                    <View
+                      style={{
+                        position: "absolute",
+                        top: 8,
+                        left: 8,
+                        backgroundColor: isDark ? "rgba(20,21,27,0.88)" : "rgba(255,255,255,0.92)",
+                        paddingHorizontal: 7,
+                        paddingVertical: 3,
+                        borderRadius: 6,
+                        borderWidth: 1,
+                        borderColor: isDark ? "rgba(212,175,55,0.3)" : "rgba(0,0,0,0.1)",
+                      }}
+                    >
+                      <Text
+                        style={{
+                          fontSize: 9.5,
+                          fontFamily: FONTS.sansBold,
+                          color: colors.gold,
+                        }}
+                      >
+                        Item #{item.artworkId}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.savedCardBody}>
+                    <Text
+                      style={[styles.savedCardTitle, { color: colors.text }]}
+                      numberOfLines={1}
+                    >
+                      {item.artworkTitle}
+                    </Text>
+                    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
+                      <Text
+                        style={{
+                          fontSize: 10.5,
+                          fontFamily: FONTS.sansBold,
+                          color: item.status === "contacted" ? "#2ECC71" : colors.gold,
+                        }}
+                      >
+                        {item.status === "contacted"
+                          ? "Curator Contacted"
+                          : item.status === "closed"
+                          ? "Concluded"
+                          : "Under Review"}
+                      </Text>
+                      <Ionicons name="chevron-forward" size={14} color={colors.textSecondary} />
+                    </View>
+                  </View>
+                </Pressable>
+              )}
+            />
+          </View>
+        ) : null}
 
         {/* SAVED COLLECTION (WISHLIST) */}
         <View style={styles.wishlistSection}>
@@ -596,6 +784,21 @@ export default function ProfileScreen() {
             handleAction(() => router.push("/auctions" as any));
           }}
         />
+        <Action
+          icon="cube-outline"
+          title="Acquisition Inquiries"
+          subtitle={
+            myEnquiries.length > 0
+              ? `${myEnquiries.length} Active Dossier(s) • Tap to view curatorial inquiries`
+              : "View your artwork acquisition dossiers and curatorial requests"
+          }
+          onPress={() => {
+            handleAction(() => {
+              setSelectedEnquiryToView(null);
+              setShowInquiriesModal(true);
+            });
+          }}
+        />
 
         {/* ABOUT & CONTACT SECTION */}
         <Text style={[styles.sectionHeader, { color: colors.gold, marginTop: 24 }]}>
@@ -753,6 +956,19 @@ export default function ProfileScreen() {
         onClose={() => setSelectedPassToView(null)}
         exhibition={null}
         initialPass={selectedPassToView}
+      />
+
+      {/* ACQUISITION INQUIRIES MODAL */}
+      <AcquisitionInquiriesModal
+        visible={showInquiriesModal}
+        onClose={() => {
+          setShowInquiriesModal(false);
+          setSelectedEnquiryToView(null);
+        }}
+        enquiries={myEnquiries}
+        isLoading={enquiriesLoading}
+        onRefresh={loadEnquiries}
+        initialSelectedEnquiry={selectedEnquiryToView}
       />
     </SafeAreaView>
   );

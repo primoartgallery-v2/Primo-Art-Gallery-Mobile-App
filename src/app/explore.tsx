@@ -153,6 +153,10 @@ export default function ExploreScreen() {
     }
   }, [sortBy]);
 
+  const isArtistFilterActive = Boolean(
+    selectedArtistId || selectedArtistName || onlyFollowedArtists
+  );
+
   // Core Data Fetcher
   const fetchArtworks = useCallback(
     async (targetPage = 1, isRefresh = false) => {
@@ -165,31 +169,89 @@ export default function ExploreScreen() {
       setError(null);
 
       try {
-        const result = await getProducts({
-          page: targetPage,
-          perPage: 20,
-          category: selectedCategoryId ?? undefined,
-          search: debouncedSearch.length > 0 ? debouncedSearch : undefined,
-          minPrice: minPrice !== undefined ? minPrice : undefined,
-          maxPrice: maxPrice !== undefined ? maxPrice : undefined,
-          orderby: sortParams.orderby,
-          order: sortParams.order,
-          forceRefresh: isRefresh,
-        });
-
-        if (targetPage === 1) {
-          setProducts(result.products);
-        } else {
-          setProducts((prev) => {
-            const existingIds = new Set(prev.map((p) => p.id));
-            const newItems = result.products.filter((p) => !existingIds.has(p.id));
-            return [...prev, ...newItems];
+        if (isArtistFilterActive) {
+          // When an artist or followed-artist filter is active, fetch all catalogue pages
+          // so client-side artist extraction & filtering is authoritative across the full collection.
+          const firstPageResult = await getProducts({
+            page: 1,
+            perPage: 50,
+            category: selectedCategoryId ?? undefined,
+            search: debouncedSearch.length > 0 ? debouncedSearch : undefined,
+            minPrice: minPrice !== undefined ? minPrice : undefined,
+            maxPrice: maxPrice !== undefined ? maxPrice : undefined,
+            orderby: sortParams.orderby,
+            order: sortParams.order,
+            forceRefresh: isRefresh,
           });
-        }
 
-        setPage(result.page);
-        setTotalPages(result.totalPages);
-        setTotalCount(result.total);
+          const allFetched: WooCommerceProduct[] = [...firstPageResult.products];
+          const totalPagesToFetch = Math.min(firstPageResult.totalPages || 1, 20);
+
+          if (totalPagesToFetch > 1) {
+            const pageRequests = [];
+            for (let p = 2; p <= totalPagesToFetch; p++) {
+              pageRequests.push(
+                getProducts({
+                  page: p,
+                  perPage: 50,
+                  category: selectedCategoryId ?? undefined,
+                  search: debouncedSearch.length > 0 ? debouncedSearch : undefined,
+                  minPrice: minPrice !== undefined ? minPrice : undefined,
+                  maxPrice: maxPrice !== undefined ? maxPrice : undefined,
+                  orderby: sortParams.orderby,
+                  order: sortParams.order,
+                  forceRefresh: isRefresh,
+                }).catch(() => null)
+              );
+            }
+            const subsequentResults = await Promise.all(pageRequests);
+            for (const res of subsequentResults) {
+              if (res?.products) {
+                allFetched.push(...res.products);
+              }
+            }
+          }
+
+          // Deduplicate products by id
+          const seenIds = new Set<number>();
+          const uniqueProducts = allFetched.filter((p) => {
+            if (seenIds.has(p.id)) return false;
+            seenIds.add(p.id);
+            return true;
+          });
+
+          setProducts(uniqueProducts);
+          setPage(firstPageResult.totalPages || 1);
+          setTotalPages(firstPageResult.totalPages || 1);
+          setTotalCount(firstPageResult.total);
+        } else {
+          // General Explore browsing: standard single-page incremental pagination
+          const result = await getProducts({
+            page: targetPage,
+            perPage: 20,
+            category: selectedCategoryId ?? undefined,
+            search: debouncedSearch.length > 0 ? debouncedSearch : undefined,
+            minPrice: minPrice !== undefined ? minPrice : undefined,
+            maxPrice: maxPrice !== undefined ? maxPrice : undefined,
+            orderby: sortParams.orderby,
+            order: sortParams.order,
+            forceRefresh: isRefresh,
+          });
+
+          if (targetPage === 1) {
+            setProducts(result.products);
+          } else {
+            setProducts((prev) => {
+              const existingIds = new Set(prev.map((p) => p.id));
+              const newItems = result.products.filter((p) => !existingIds.has(p.id));
+              return [...prev, ...newItems];
+            });
+          }
+
+          setPage(result.page);
+          setTotalPages(result.totalPages);
+          setTotalCount(result.total);
+        }
       } catch (err: any) {
         setError(
           err instanceof Error
@@ -202,7 +264,14 @@ export default function ExploreScreen() {
         setRefreshing(false);
       }
     },
-    [selectedCategoryId, debouncedSearch, minPrice, maxPrice, sortParams]
+    [
+      isArtistFilterActive,
+      selectedCategoryId,
+      debouncedSearch,
+      minPrice,
+      maxPrice,
+      sortParams,
+    ]
   );
 
   // Trigger search / filter update whenever filter parameters change
@@ -239,8 +308,26 @@ export default function ExploreScreen() {
           p.attributes?.some(
             (a) =>
               a.name.toLowerCase().includes("artist") &&
-              a.options.some((opt) => opt.toLowerCase().includes(targetName))
+              a.options.some((opt) => {
+                const optLower = opt.toLowerCase().trim();
+                return (
+                  optLower.includes(targetName) ||
+                  targetName.includes(optLower)
+                );
+              })
           )
+        ) {
+          return true;
+        }
+        if (
+          p.meta_data?.some((m) => {
+            const k = m.key.toLowerCase();
+            if (k.includes("artist") && typeof m.value === "string") {
+              const v = m.value.toLowerCase().trim();
+              return v.includes(targetName) || (v.length > 3 && targetName.includes(v));
+            }
+            return false;
+          })
         ) {
           return true;
         }
@@ -354,8 +441,18 @@ export default function ExploreScreen() {
     title_asc: "Title: A to Z",
   }[sortBy];
 
+  const displayCount =
+    selectedArtistId || selectedArtistName || onlyFollowedArtists
+      ? visibleProducts.length
+      : (totalCount || visibleProducts.length);
+
   const onEndReached = () => {
-    if (!loading && !loadingMore && page < totalPages) {
+    if (
+      !loading &&
+      !loadingMore &&
+      !isArtistFilterActive &&
+      page < totalPages
+    ) {
       fetchArtworks(page + 1);
     }
   };
@@ -656,7 +753,7 @@ export default function ExploreScreen() {
       <View style={styles.resultsInfoRow}>
         <View style={styles.resultsLeft}>
           <Text style={[styles.resultsCount, { color: colors.textSecondary }]}>
-            {loading ? "Discovering…" : `${totalCount || visibleProducts.length} Artworks`}
+            {loading ? "Discovering…" : `${displayCount} Artworks`}
           </Text>
           {sortBy !== "featured" ? (
             <Text style={[styles.activeBadge, { color: colors.gold }]}>• {sortLabel}</Text>

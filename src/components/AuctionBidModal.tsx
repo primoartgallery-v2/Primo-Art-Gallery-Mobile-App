@@ -143,7 +143,7 @@ export function AuctionBidModal({
             text: "Sign In",
             onPress: () => {
               onClose();
-              router.push("/auth" as any);
+              router.push("/login");
             },
           },
         ]

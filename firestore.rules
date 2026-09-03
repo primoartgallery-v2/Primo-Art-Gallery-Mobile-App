@@ -18,6 +18,18 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Exhibition VIP RSVPs: Block direct client creation, reading, modification, and deletion.
+    // Written exclusively via Render backend proxy using Firebase Admin SDK.
+    match /exhibitions_rsvps/{rsvpId} {
+      allow read, write: if false;
+    }
+
+    // Auction VIP Bids: Block direct client creation, reading, modification, and deletion.
+    // Written exclusively via Render backend proxy using Firebase Admin SDK.
+    match /auctions_bids/{bidId} {
+      allow read, write: if false;
+    }
+
     // OTP verification sessions: Block direct client access.
     // Managed exclusively by Render backend proxy using Firebase Admin SDK.
     match /otp_sessions/{sessionId} {
