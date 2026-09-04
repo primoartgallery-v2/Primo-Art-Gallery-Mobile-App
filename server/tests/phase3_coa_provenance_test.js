@@ -1,3 +1,5 @@
+process.env.COA_SIGNING_SECRET = process.env.COA_SIGNING_SECRET || "digital_coa_provenance_master_key_182740c";
+
 const assert = require("assert");
 const crypto = require("crypto");
 const http = require("http");
@@ -190,7 +192,7 @@ async function runPhase3BTests() {
     const res = await apiGet(`/api/products/${validId}/coa`);
     const coa = res.data.coa;
 
-    const signingSecret = process.env.COA_SIGNING_SECRET || "primo_curatorial_authority_signing_secret_2026";
+    const signingSecret = process.env.COA_SIGNING_SECRET;
     const expectedSignature = crypto
       .createHmac("sha256", signingSecret)
       .update(coa.integrityHash)

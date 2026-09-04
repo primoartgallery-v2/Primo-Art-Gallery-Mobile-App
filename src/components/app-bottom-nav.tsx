@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
+import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import * as Haptics from "expo-haptics";
-import { usePathname, useRouter } from "expo-router";
 import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -8,84 +8,138 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { FONTS } from "@/constants/typography";
 import { useAppTheme } from "@/hooks/useAppTheme";
 
-const items = [
-  { label: "Home", icon: "home-outline", activeIcon: "home", href: "/" },
-  { label: "Explore", icon: "images-outline", activeIcon: "images", href: "/explore" },
-  { label: "Auction", icon: "hammer-outline", activeIcon: "hammer", href: "/auctions" },
-  { label: "Profile", icon: "person-outline", activeIcon: "person", href: "/profile" },
-] as const;
+type TabRouteName = "index" | "explore" | "auctions" | "profile";
 
-export const AppBottomNav = React.memo(function AppBottomNav() {
-  const router = useRouter();
-  const pathname = usePathname();
+const TAB_CONFIG: Record<
+  TabRouteName,
+  { label: string; icon: keyof typeof Ionicons.glyphMap; activeIcon: keyof typeof Ionicons.glyphMap }
+> = {
+  index: {
+    label: "Home",
+    icon: "home-outline",
+    activeIcon: "home",
+  },
+  explore: {
+    label: "Explore",
+    icon: "images-outline",
+    activeIcon: "images",
+  },
+  auctions: {
+    label: "Auction",
+    icon: "hammer-outline",
+    activeIcon: "hammer",
+  },
+  profile: {
+    label: "Profile",
+    icon: "person-outline",
+    activeIcon: "person",
+  },
+};
+
+export const AppBottomNav = React.memo(function AppBottomNav(props?: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
-  const { colors, isDark } = useAppTheme();
+  const { colors } = useAppTheme();
   const bottomPadding = Math.max(insets.bottom, 8);
 
-  const handleTabPress = (href: string, active: boolean) => {
-    if (!active) {
-      try {
-        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      } catch {}
-      router.replace(href as any);
-    }
-  };
+  if (props && props.state) {
+    const { state, descriptors, navigation } = props;
 
-  return (
-    <View
-      style={[
-        styles.bar,
-        {
-          height: 60 + bottomPadding,
-          paddingBottom: bottomPadding,
-          backgroundColor: colors.navBackground,
-          borderTopColor: colors.navBorder,
-        },
-      ]}
-      accessibilityRole="tablist"
-    >
-      {items.map((item) => {
-        const active = pathname === item.href;
-        return (
-          <Pressable
-            key={item.href}
-            style={({ pressed }) => [
-              styles.item,
-              pressed && styles.itemPressed,
-            ]}
-            onPress={() => handleTabPress(item.href, active)}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: active }}
-            accessibilityLabel={item.label}
-          >
-            <View
-              style={[
-                styles.iconContainer,
-                active && {
-                  backgroundColor: colors.navActivePill,
-                },
+    return (
+      <View
+        style={[
+          styles.bar,
+          {
+            height: 60 + bottomPadding,
+            paddingBottom: bottomPadding,
+            backgroundColor: colors.navBackground,
+            borderTopColor: colors.navBorder,
+          },
+        ]}
+        accessibilityRole="tablist"
+      >
+        {state.routes.map((route, index) => {
+          const isFocused = state.index === index;
+          const config = TAB_CONFIG[route.name as TabRouteName];
+          if (!config) return null;
+
+          const descriptor = descriptors[route.key];
+          const options = descriptor ? descriptor.options : undefined;
+          const label =
+            options?.tabBarLabel !== undefined
+              ? options.tabBarLabel
+              : options?.title !== undefined
+              ? options.title
+              : config.label;
+
+          const onPress = () => {
+            const event = navigation.emit({
+              type: "tabPress",
+              target: route.key,
+              canPreventDefault: true,
+            });
+
+            if (!isFocused && !event.defaultPrevented) {
+              try {
+                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              } catch {}
+              navigation.navigate(route.name);
+            }
+          };
+
+          const onLongPress = () => {
+            navigation.emit({
+              type: "tabLongPress",
+              target: route.key,
+            });
+          };
+
+          return (
+            <Pressable
+              key={route.key}
+              style={({ pressed }) => [
+                styles.item,
+                pressed && styles.itemPressed,
               ]}
+              onPress={onPress}
+              onLongPress={onLongPress}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: isFocused }}
+              accessibilityLabel={
+                options?.tabBarAccessibilityLabel ||
+                (typeof label === "string" ? label : config.label)
+              }
             >
-              <Ionicons
-                name={active ? (item.activeIcon as any) : (item.icon as any)}
-                size={20}
-                color={active ? colors.navActive : colors.navInactive}
-              />
-            </View>
-            <Text
-              style={[
-                styles.label,
-                { color: active ? colors.navActive : colors.navInactive },
-                active && styles.labelActive,
-              ]}
-            >
-              {item.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
+              <View
+                style={[
+                  styles.iconContainer,
+                  isFocused && {
+                    backgroundColor: colors.navActivePill,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name={isFocused ? config.activeIcon : config.icon}
+                  size={20}
+                  color={isFocused ? colors.navActive : colors.navInactive}
+                />
+              </View>
+              <Text
+                style={[
+                  styles.label,
+                  { color: isFocused ? colors.navActive : colors.navInactive },
+                  isFocused && styles.labelActive,
+                ]}
+              >
+                {typeof label === "string" ? label : config.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    );
+  }
+
+  return null;
 });
 
 const styles = StyleSheet.create({

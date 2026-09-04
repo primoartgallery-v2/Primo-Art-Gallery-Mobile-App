@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { API_BASE_URL } from "@/constants/apiConfig";
 import { getAuthToken } from "./collectorStorage";
 
 export type AuctionLot = {
@@ -55,8 +56,6 @@ export type PlaceBidResponse = {
   nextMinimumBid: number;
   message: string;
 };
-
-import { API_BASE_URL } from "@/constants/apiConfig";
 
 export const AUCTION_BIDS_STORAGE_PREFIX = "@primo_auction_bids_";
 

@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { API_BASE_URL } from "@/constants/apiConfig";
 import { getAuthToken } from "./collectorStorage";
 
 export type ExhibitionVipPass = {
@@ -37,8 +38,6 @@ export type ExhibitionRsvpResponse = {
   pass: ExhibitionVipPass;
   message: string;
 };
-
-import { API_BASE_URL } from "@/constants/apiConfig";
 
 export const PASSES_STORAGE_PREFIX = "@primo_exhibition_passes_";
 export const GUEST_PASSES_STORAGE_KEY = "@primo_exhibition_passes_guest";

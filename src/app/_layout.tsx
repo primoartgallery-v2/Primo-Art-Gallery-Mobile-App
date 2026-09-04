@@ -110,13 +110,26 @@ export default function RootLayout() {
       }
 
       // If user is on the Home screen, trigger the bottom exit confirmation modal
-      if (pathname === "/" || pathname === "/index" || !pathname) {
+      if (
+        pathname === "/" ||
+        pathname === "/index" ||
+        pathname === "/(tabs)" ||
+        pathname === "/(tabs)/index" ||
+        !pathname
+      ) {
         setShowExitModal(true);
         return true;
       }
 
       // If user is on top level tabs (Explore, Auctions, Profile)
-      if (pathname === "/explore" || pathname === "/auctions" || pathname === "/profile") {
+      if (
+        pathname === "/explore" ||
+        pathname === "/(tabs)/explore" ||
+        pathname === "/auctions" ||
+        pathname === "/(tabs)/auctions" ||
+        pathname === "/profile" ||
+        pathname === "/(tabs)/profile"
+      ) {
         if (router.canGoBack()) {
           router.back();
         } else {
@@ -158,15 +171,12 @@ export default function RootLayout() {
         <WishlistProvider>
           <GestureHandlerRootView style={{ flex: 1 }}>
             <Stack screenOptions={{ headerShown: false }}>
-              <Stack.Screen name="index" />
-              <Stack.Screen name="explore" />
-              <Stack.Screen name="auctions" />
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
               <Stack.Screen name="exhibitions" />
               <Stack.Screen
                 name="artists"
                 options={{ animation: "slide_from_right" }}
               />
-              <Stack.Screen name="profile" />
               <Stack.Screen
                 name="signup"
                 options={{ animation: "slide_from_right" }}

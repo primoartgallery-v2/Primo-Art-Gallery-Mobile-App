@@ -18,7 +18,7 @@ export function SignOutConfirmModal({
   onClose,
   onConfirm,
 }: SignOutConfirmModalProps) {
-  const { colors, isDark } = useAppTheme();
+  const { colors } = useAppTheme();
 
   const handleCancel = () => {
     try {

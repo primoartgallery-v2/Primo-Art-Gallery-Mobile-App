@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { API_BASE_URL } from "@/constants/apiConfig";
 import { getAuthToken } from "./collectorStorage";
 import type { WooCommerceProduct } from "./woocommerce";
 
@@ -14,8 +15,6 @@ export type RecentlyViewedItem = {
 export const RECENTLY_VIEWED_STORAGE_PREFIX = "@primo_recently_viewed_";
 export const GUEST_RECENTLY_VIEWED_KEY = "@primo_recently_viewed_guest";
 export const PENDING_RECENTLY_VIEWED_SYNC_PREFIX = "@primo_pending_recently_viewed_sync_";
-
-import { API_BASE_URL } from "@/constants/apiConfig";
 
 export function getRecentlyViewedStorageKey(userId: string | number | null | undefined): string {
   if (userId !== undefined && userId !== null && String(userId).trim().length > 0) {

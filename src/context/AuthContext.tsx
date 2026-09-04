@@ -20,6 +20,11 @@ import {
   type UpdateProfileParams,
 } from "@/services/auth";
 import { getFirebaseAuth, getFirebaseAuthModule } from "@/services/firebase";
+import {
+  clearPendingRegistrationSecure,
+  getPendingRegistrationSecure,
+  savePendingRegistrationSecure,
+} from "@/services/secureStore";
 
 export type PendingRegistrationData = {
   email: string;
@@ -95,6 +100,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const setPendingRegistration = useCallback((data: PendingRegistrationData | null) => {
     pendingRegistrationRef.current = data;
+    if (data) {
+      void savePendingRegistrationSecure(data);
+    } else {
+      void clearPendingRegistrationSecure();
+    }
   }, []);
 
   const getPendingRegistrationEmail = useCallback(() => {
@@ -111,22 +121,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const cleanEmail = email.trim().toLowerCase();
       let registrationOptions: { password?: string; fullName?: string; phone?: string } | undefined;
 
+      // Check RAM first, then fallback to hardware-backed SecureStore (resilient against app backgrounding)
+      let pending = pendingRegistrationRef.current;
+      if (!pending) {
+        pending = await getPendingRegistrationSecure();
+      }
+
       if (
-        pendingRegistrationRef.current &&
-        pendingRegistrationRef.current.email.trim().toLowerCase() === cleanEmail
+        pending &&
+        pending.email.trim().toLowerCase() === cleanEmail
       ) {
         registrationOptions = {
-          password: pendingRegistrationRef.current.password,
-          fullName: pendingRegistrationRef.current.fullName,
-          phone: pendingRegistrationRef.current.phone,
+          password: pending.password,
+          fullName: pending.fullName,
+          phone: pending.phone,
         };
-        // Wipe sensitive in-memory registration data immediately upon consumption
-        pendingRegistrationRef.current = null;
       }
 
       const loggedUser = await verifyEmailOtp(cleanEmail, otp, registrationOptions);
+
+      // Wipe sensitive temporary registration data immediately upon successful registration
+      pendingRegistrationRef.current = null;
+      await clearPendingRegistrationSecure();
+
       setUser(loggedUser);
       return loggedUser;
+    } catch (err: any) {
+      // If terminal lockout occurs, clear pending registration
+      if (err?.locked) {
+        pendingRegistrationRef.current = null;
+        await clearPendingRegistrationSecure();
+      }
+      throw err;
     } finally {
       setIsLoading(false);
     }
@@ -169,6 +195,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(true);
     try {
       pendingRegistrationRef.current = null;
+      await clearPendingRegistrationSecure();
       await logoutUser();
       setUser(null);
     } finally {

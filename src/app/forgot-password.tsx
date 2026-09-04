@@ -334,7 +334,7 @@ export default function ForgotPasswordScreen() {
                   disabled={isSubmitting}
                 >
                   <Text style={[styles.resendBtnText, { color: colors.gold }]}>
-                    Didn't receive code? Resend Code
+                    Didn&apos;t receive code? Resend Code
                   </Text>
                 </Pressable>
               </>

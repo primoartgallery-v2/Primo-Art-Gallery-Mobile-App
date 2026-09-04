@@ -17,7 +17,6 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { AppBottomNav } from "@/components/app-bottom-nav";
 import { FONTS } from "@/constants/typography";
 import { useAuth } from "@/context/AuthContext";
 import { useAppTheme } from "@/hooks/useAppTheme";
@@ -36,7 +35,7 @@ import {
 
 export default function ArtistsScreen() {
   const router = useRouter();
-  const { colors, isDark } = useAppTheme();
+  const { colors } = useAppTheme();
   const { user } = useAuth();
   const [artists, setArtists] = useState<ArtistItem[]>([]);
   const [savedArtistIds, setSavedArtistIds] = useState<string[]>([]);
@@ -370,8 +369,6 @@ export default function ArtistsScreen() {
           }
         />
       )}
-
-      <AppBottomNav />
     </SafeAreaView>
   );
 }

@@ -36,28 +36,38 @@ export default function SignUpScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [backendError, setBackendError] = useState<string | null>(null);
 
-  const validate = () => {
+  const validate = (overrides?: {
+    fullName?: string;
+    email?: string;
+    password?: string;
+    phone?: string;
+  }) => {
+    const currentFullName = overrides && "fullName" in overrides ? (overrides.fullName ?? "") : fullName;
+    const currentEmail = overrides && "email" in overrides ? (overrides.email ?? "") : email;
+    const currentPassword = overrides && "password" in overrides ? (overrides.password ?? "") : password;
+    const currentPhone = overrides && "phone" in overrides ? (overrides.phone ?? "") : phone;
+
     const newErrors: Record<string, string> = {};
 
-    if (!fullName.trim()) {
+    if (!currentFullName.trim()) {
       newErrors.fullName = "Full name is required";
-    } else if (fullName.trim().length < 2) {
+    } else if (currentFullName.trim().length < 2) {
       newErrors.fullName = "Name must be at least 2 characters";
     }
 
-    if (!email.trim()) {
+    if (!currentEmail.trim()) {
       newErrors.email = "Email address is required";
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(currentEmail.trim())) {
       newErrors.email = "Please enter a valid email address";
     }
 
-    if (!password) {
+    if (!currentPassword) {
       newErrors.password = "Password is required";
-    } else if (password.length < 8) {
+    } else if (currentPassword.length < 8) {
       newErrors.password = "Password must be at least 8 characters";
     }
 
-    if (phone.trim() && phone.replace(/[^\d]/g, "").length < 8) {
+    if (currentPhone.trim() && currentPhone.replace(/[^\d]/g, "").length < 8) {
       newErrors.phone = "Please enter a valid phone number";
     }
 
@@ -92,7 +102,7 @@ export default function SignUpScreen() {
     try {
       const cleanEmail = email.trim().toLowerCase();
 
-      // Store sensitive registration payload strictly in RAM (AuthContext)
+      // Store sensitive registration payload strictly in RAM and hardware SecureStore
       setPendingRegistration({
         email: cleanEmail,
         password,
@@ -102,11 +112,13 @@ export default function SignUpScreen() {
 
       await sendOtp(cleanEmail);
 
-      // Navigate to /verify-otp with ONLY the email parameter (No password in navigation params)
+      // Navigate to /verify-otp with safe non-sensitive profile parameters (Password NEVER in params)
       router.push({
         pathname: "/verify-otp" as any,
         params: {
           email: cleanEmail,
+          fullName: fullName.trim(),
+          phone: phone.trim(),
         },
       });
     } catch (err: any) {
@@ -183,7 +195,7 @@ export default function SignUpScreen() {
                   value={fullName}
                   onChangeText={(val) => {
                     setFullName(val);
-                    if (touched.fullName) validate();
+                    if (touched.fullName) validate({ fullName: val });
                   }}
                   onBlur={() => handleBlur("fullName")}
                   autoCapitalize="words"
@@ -212,7 +224,7 @@ export default function SignUpScreen() {
                   value={email}
                   onChangeText={(val) => {
                     setEmail(val);
-                    if (touched.email) validate();
+                    if (touched.email) validate({ email: val });
                   }}
                   onBlur={() => handleBlur("email")}
                   keyboardType="email-address"
@@ -243,7 +255,7 @@ export default function SignUpScreen() {
                   value={password}
                   onChangeText={(val) => {
                     setPassword(val);
-                    if (touched.password) validate();
+                    if (touched.password) validate({ password: val });
                   }}
                   onBlur={() => handleBlur("password")}
                   secureTextEntry={!showPassword}
@@ -288,7 +300,7 @@ export default function SignUpScreen() {
                   value={phone}
                   onChangeText={(val) => {
                     setPhone(val);
-                    if (touched.phone) validate();
+                    if (touched.phone) validate({ phone: val });
                   }}
                   onBlur={() => handleBlur("phone")}
                   keyboardType="phone-pad"

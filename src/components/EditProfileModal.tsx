@@ -36,7 +36,7 @@ const LUXURY_AVATARS = [
 ];
 
 export function EditProfileModal({ visible, onClose }: EditProfileModalProps) {
-  const { colors, isDark } = useAppTheme();
+  const { colors } = useAppTheme();
   const { user, updateProfile } = useAuth();
 
   const [firstName, setFirstName] = useState("");

@@ -1,4 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { API_BASE_URL } from "@/constants/apiConfig";
+import { authenticatedFetch } from "./sessionManager";
 import type { WooCommerceProduct } from "./woocommerce";
 import { getIdToken, saveSessionCredentials, clearSessionCredentials } from "./secureStore";
 
@@ -6,8 +8,6 @@ export const AUTH_TOKEN_KEY = "@primo_auth_token";
 export const PENDING_WISHLIST_SYNC_PREFIX = "@primo_pending_wishlist_sync_";
 export const WISHLIST_STORAGE_PREFIX = "@primo_gallery_wishlist_";
 export const GUEST_WISHLIST_KEY = "@primo_gallery_wishlist_guest";
-
-import { API_BASE_URL } from "@/constants/apiConfig";
 
 /**
  * Gets the stored authentication token from hardware-backed SecureStore.
@@ -56,8 +56,6 @@ export function deduplicateProducts(products: WooCommerceProduct[]): WooCommerce
 
   return result;
 }
-
-import { authenticatedFetch } from "./sessionManager";
 
 /**
  * Fetches user's wishlist from Cloud Firestore via secure backend proxy.

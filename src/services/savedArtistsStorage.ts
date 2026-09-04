@@ -1,11 +1,10 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { API_BASE_URL } from "@/constants/apiConfig";
 import { getAuthToken } from "./collectorStorage";
 
 export const SAVED_ARTISTS_STORAGE_PREFIX = "@primo_saved_artists_";
 export const GUEST_SAVED_ARTISTS_KEY = "@primo_saved_artists_guest";
 export const PENDING_SAVED_ARTISTS_SYNC_PREFIX = "@primo_pending_saved_artists_sync_";
-
-import { API_BASE_URL } from "@/constants/apiConfig";
 
 export function getSavedArtistsStorageKey(userId: string | number | null | undefined): string {
   if (userId !== undefined && userId !== null && String(userId).trim().length > 0) {

@@ -93,7 +93,7 @@ async function fetchWithSingleRetry(
       return await doFetch();
     }
     return res;
-  } catch (err) {
+  } catch {
     // On transient network or abort failure, wait 800ms and retry once
     await new Promise((resolve) => setTimeout(resolve, 800));
     return await doFetch();
@@ -430,7 +430,7 @@ export async function getArtistsList(forceRefresh = false): Promise<ArtistItem[]
     artistsListCache = { data: parsed, timestamp: Date.now() };
     void savePersistentArtistsList(parsed);
     return parsed;
-  } catch (error) {
+  } catch {
     if (artistsListCache) return artistsListCache.data;
     const persistent = await getPersistentArtistsList();
     if (persistent && persistent.length > 0) return persistent;

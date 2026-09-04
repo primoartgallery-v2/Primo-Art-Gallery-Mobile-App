@@ -1,5 +1,3 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
-
 // Default public Firebase Client configuration
 export const FIREBASE_CLIENT_CONFIG = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY || "",

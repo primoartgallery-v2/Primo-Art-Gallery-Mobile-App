@@ -15,7 +15,6 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { AppBottomNav } from "@/components/app-bottom-nav";
 import { GALLERY_CONFIG } from "@/constants/galleryConfig";
 import { FONTS } from "@/constants/typography";
 import { useAppTheme } from "@/hooks/useAppTheme";
@@ -27,7 +26,7 @@ import {
 
 export default function ExhibitionsScreen() {
   const router = useRouter();
-  const { colors, isDark } = useAppTheme();
+  const { colors } = useAppTheme();
   const [exhibitions, setExhibitions] = useState<Exhibition[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -283,8 +282,6 @@ export default function ExhibitionsScreen() {
           )}
         />
       )}
-
-      <AppBottomNav />
     </SafeAreaView>
   );
 }

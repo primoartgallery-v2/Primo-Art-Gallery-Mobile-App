@@ -16,7 +16,6 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { AppBottomNav } from "@/components/app-bottom-nav";
 import { GALLERY_CONFIG } from "@/constants/galleryConfig";
 import { FONTS } from "@/constants/typography";
 import { useAppTheme } from "@/hooks/useAppTheme";
@@ -345,8 +344,6 @@ export default function AuctionsScreen() {
           </View>
         </View>
       </ScrollView>
-
-      <AppBottomNav />
     </SafeAreaView>
   );
 }

@@ -18,23 +18,18 @@ import { useAppTheme } from "@/hooks/useAppTheme";
 import {
   clearNotificationHistory,
   getNotificationHistory,
-  getStoredPushToken,
   markAllNotificationsAsRead,
-  sendLocalNotification,
   type PrimoNotificationItem,
 } from "@/services/notifications";
 
 export default function NotificationsScreen() {
   const router = useRouter();
-  const { colors, isDark } = useAppTheme();
+  const { colors } = useAppTheme();
   const [items, setItems] = useState<PrimoNotificationItem[]>([]);
-  const [pushToken, setPushToken] = useState<string | null>(null);
 
   const loadNotifications = useCallback(async () => {
     const list = await getNotificationHistory();
     setItems(list);
-    const token = await getStoredPushToken();
-    setPushToken(token);
   }, []);
 
   useEffect(() => {
@@ -74,30 +69,6 @@ export default function NotificationsScreen() {
           },
         },
       ]
-    );
-  };
-
-  // Triggers an instant live test push notification
-  const handleTriggerTestPush = async () => {
-    try {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    } catch {}
-
-    await sendLocalNotification({
-      title: "🔴 Live Art Auction Dropped!",
-      body: "Exclusive masterwork live bidding is now active on Primo Art Gallery. Tap to place your bid!",
-      data: {
-        type: "auction",
-        deepLink: "/auctions",
-      },
-    });
-
-    await loadNotifications();
-
-    Alert.alert(
-      "Push Notification Sent!",
-      "A live high-priority notification banner has been dispatched to your notification bar. Tap it to test deep linking to the Live Auction screen!",
-      [{ text: "OK" }]
     );
   };
 

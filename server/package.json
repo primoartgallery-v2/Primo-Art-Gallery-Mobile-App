@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "node --watch index.js"
+    "dev": "node --watch index.js",
+    "test": "node --test --test-concurrency=1 tests/auction_parser_authoritative_test.js tests/security_hardening_test.js tests/security_auth_hardened_test.js tests/session_lifecycle_test.js tests/phase3_coa_provenance_test.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

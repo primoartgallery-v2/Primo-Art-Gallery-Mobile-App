@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { API_BASE_URL } from "@/constants/apiConfig";
 import { getAuthToken } from "./collectorStorage";
 
 export type UserAddress = {
@@ -18,8 +19,6 @@ export type UserAddress = {
 export const PENDING_ADDRESSES_SYNC_PREFIX = "@primo_pending_addresses_sync_";
 export const ADDRESSES_STORAGE_PREFIX = "@primo_user_addresses_";
 export const GUEST_ADDRESSES_KEY = "@primo_user_addresses_guest";
-
-import { API_BASE_URL } from "@/constants/apiConfig";
 
 const DEFAULT_SAMPLE_ADDRESSES: UserAddress[] = [
   {

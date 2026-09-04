@@ -1,11 +1,11 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { API_BASE_URL } from "@/constants/apiConfig";
 import { getFirebaseAuth, getFirebaseAuthModule } from "./firebase";
-import { getAuthToken } from "./collectorStorage";
 import { mergeGuestRecentlyViewed } from "./recentlyViewedStorage";
 import { mergeGuestSavedArtists } from "./savedArtistsStorage";
 import { syncGuestAddressesToCloud, syncPendingAddressesToCloud } from "./address";
 import { exchangeCustomTokenForSession, authenticatedFetch } from "./sessionManager";
-import { clearSessionCredentials, migrateLegacyAsyncStorageTokens } from "./secureStore";
+import { clearSessionCredentials } from "./secureStore";
 import { clearStoredEnquiries } from "./enquiryService";
 
 // Storage keys
@@ -16,8 +16,6 @@ export const LEGACY_UNCLAIMED_BACKUP_KEY = "@primo_legacy_unclaimed_backup";
 
 export const LEGACY_WISHLIST_GLOBAL_KEY = "@primo_gallery_wishlist_v1";
 export const LEGACY_ADDRESSES_GLOBAL_KEY = "@primo_user_addresses";
-
-import { API_BASE_URL } from "@/constants/apiConfig";
 
 export type PrimoCollectorUser = {
   id: string | number;

@@ -1,12 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { Image as ExpoImage } from "expo-image";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
-  Modal,
   Platform,
   Pressable,
   RefreshControl,
@@ -18,7 +16,17 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { AppBottomNav } from "@/components/app-bottom-nav";
+import { ExploreArtworkCard } from "@/components/explore/ExploreArtworkCard";
+import { ExploreCategoryBar } from "@/components/explore/ExploreCategoryBar";
+import {
+  ExplorePriceFilterModal,
+  PRICE_PRESETS,
+  type PricePreset,
+} from "@/components/explore/ExplorePriceFilterModal";
+import {
+  ExploreSortMenuModal,
+  type SortOption,
+} from "@/components/explore/ExploreSortMenuModal";
 import { FONTS } from "@/constants/typography";
 import { useAuth } from "@/context/AuthContext";
 import { useWishlist } from "@/context/WishlistContext";
@@ -31,23 +39,6 @@ import {
   type WooCommerceCategory,
   type WooCommerceProduct,
 } from "@/services/woocommerce";
-
-type SortOption = "featured" | "price_asc" | "price_desc" | "title_asc";
-
-type PricePreset = {
-  id: string;
-  label: string;
-  minPrice?: number;
-  maxPrice?: number;
-};
-
-const PRICE_PRESETS: PricePreset[] = [
-  { id: "all", label: "All Prices" },
-  { id: "under_50k", label: "Under ₹50,000", maxPrice: 50000 },
-  { id: "50k_200k", label: "₹50,000 – ₹2,00,000", minPrice: 50000, maxPrice: 200000 },
-  { id: "200k_1000k", label: "₹2,00,000 – ₹10,00,000", minPrice: 200000, maxPrice: 1000000 },
-  { id: "above_1000k", label: "₹10,00,000+", minPrice: 1000000 },
-];
 
 export default function ExploreScreen() {
   const router = useRouter();
@@ -599,155 +590,29 @@ export default function ExploreScreen() {
       </View>
 
       {/* SORT MENU POPOVER */}
-      {showSortMenu ? (
-        <View
-          style={[
-            styles.sortMenu,
-            { backgroundColor: colors.card, borderColor: colors.border },
-          ]}
-        >
-          <Text style={[styles.sortMenuTitle, { color: colors.gold }]}>SORT BY</Text>
-          {(
-            [
-              { id: "featured", label: "Featured (Newest)" },
-              { id: "price_asc", label: "Price: Low to High" },
-              { id: "price_desc", label: "Price: High to Low" },
-              { id: "title_asc", label: "Title: A to Z" },
-            ] as const
-          ).map((opt) => (
-            <Pressable
-              key={opt.id}
-              style={[
-                styles.sortOptionRow,
-                { borderBottomColor: colors.borderLight },
-                sortBy === opt.id && styles.sortOptionRowSelected,
-              ]}
-              onPress={() => handleSortSelect(opt.id)}
-            >
-              <Text
-                style={[
-                  styles.sortOptionText,
-                  { color: colors.textSecondary },
-                  sortBy === opt.id && { color: colors.text, fontFamily: FONTS.sansBold },
-                ]}
-              >
-                {opt.label}
-              </Text>
-              {sortBy === opt.id ? (
-                <Ionicons name="checkmark" size={16} color={colors.gold} />
-              ) : null}
-            </Pressable>
-          ))}
-        </View>
-      ) : null}
+      <ExploreSortMenuModal
+        visible={showSortMenu}
+        currentSort={sortBy}
+        onSelectSort={handleSortSelect}
+      />
 
-      {/* REAL CATEGORY FILTER CHIPS & FOLLOWED ARTISTS CHIP */}
-      <View style={styles.categoryFiltersContainer}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.filters}
-        >
-          {/* ALL CATEGORIES CHIP */}
-          <Pressable
-            onPress={() => {
-              handleCategorySelect(null);
-              setOnlyFollowedArtists(false);
-            }}
-            style={[
-              styles.filter,
-              {
-                backgroundColor:
-                  selectedCategoryId === null && !onlyFollowedArtists
-                    ? colors.goldSoft
-                    : colors.card,
-                borderColor:
-                  selectedCategoryId === null && !onlyFollowedArtists
-                    ? colors.gold
-                    : colors.border,
-              },
-            ]}
-          >
-            <Text
-              style={[
-                styles.filterText,
-                {
-                  color:
-                    selectedCategoryId === null && !onlyFollowedArtists
-                      ? colors.gold
-                      : colors.textSecondary,
-                },
-                selectedCategoryId === null && !onlyFollowedArtists && { fontFamily: FONTS.sansBold },
-              ]}
-            >
-              All Artworks
-            </Text>
-          </Pressable>
-
-          {/* FOLLOWED ARTISTS QUICK FILTER CHIP */}
-          {savedArtistIds.length > 0 ? (
-            <Pressable
-              onPress={() => {
-                try {
-                  void Haptics.selectionAsync();
-                } catch {}
-                setOnlyFollowedArtists((prev) => !prev);
-              }}
-              style={[
-                styles.filter,
-                {
-                  backgroundColor: onlyFollowedArtists ? colors.goldSoft : colors.card,
-                  borderColor: onlyFollowedArtists ? colors.gold : colors.border,
-                },
-              ]}
-            >
-              <Ionicons
-                name={onlyFollowedArtists ? "bookmark" : "bookmark-outline"}
-                size={13}
-                color={onlyFollowedArtists ? colors.gold : colors.textSecondary}
-                style={{ marginRight: 4 }}
-              />
-              <Text
-                style={[
-                  styles.filterText,
-                  { color: onlyFollowedArtists ? colors.gold : colors.textSecondary },
-                  onlyFollowedArtists && { fontFamily: FONTS.sansBold },
-                ]}
-              >
-                Followed Artists ({savedArtistIds.length})
-              </Text>
-            </Pressable>
-          ) : null}
-
-          {/* REAL DYNAMIC CATEGORIES */}
-          {categories.map((cat) => {
-            const active = selectedCategoryId === cat.id;
-            return (
-              <Pressable
-                key={cat.id}
-                onPress={() => handleCategorySelect(cat.id)}
-                style={[
-                  styles.filter,
-                  {
-                    backgroundColor: active ? colors.goldSoft : colors.card,
-                    borderColor: active ? colors.gold : colors.border,
-                  },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.filterText,
-                    { color: active ? colors.gold : colors.textSecondary },
-                    active && { fontFamily: FONTS.sansBold },
-                  ]}
-                >
-                  {cat.name} {cat.count ? `(${cat.count})` : ""}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-      </View>
+      {/* CATEGORY FILTER CHIPS & FOLLOWED ARTISTS CHIP */}
+      <ExploreCategoryBar
+        categories={categories}
+        selectedCategoryId={selectedCategoryId}
+        savedArtistIdsCount={savedArtistIds.length}
+        onlyFollowedArtists={onlyFollowedArtists}
+        onSelectCategory={(catId) => {
+          handleCategorySelect(catId);
+          setOnlyFollowedArtists(false);
+        }}
+        onToggleFollowedArtists={() => {
+          try {
+            void Haptics.selectionAsync();
+          } catch {}
+          setOnlyFollowedArtists((prev) => !prev);
+        }}
+      />
 
       {/* ACTIVE FILTERS & COUNT BAR */}
       <View style={styles.resultsInfoRow}>
@@ -786,7 +651,7 @@ export default function ExploreScreen() {
 
           {debouncedSearch ? (
             <View style={[styles.tagBadge, { backgroundColor: colors.goldSoft, borderColor: colors.gold }]}>
-              <Text style={[styles.tagText, { color: colors.gold }]}>"{debouncedSearch}"</Text>
+              <Text style={[styles.tagText, { color: colors.gold }]}>&ldquo;{debouncedSearch}&rdquo;</Text>
               <Pressable onPress={() => setSearchQuery("")}>
                 <Ionicons name="close" size={13} color={colors.gold} />
               </Pressable>
@@ -837,11 +702,17 @@ export default function ExploreScreen() {
         onEndReached={onEndReached}
         onEndReachedThreshold={0.4}
         renderItem={({ item, index }) => (
-          <ArtworkGridCard
+          <ExploreArtworkCard
             product={item}
             index={index}
             isSaved={isSaved(item.id)}
             onToggleWishlist={() => toggleWishlist(item)}
+            onPress={() =>
+              router.push({
+                pathname: "/painting/[id]",
+                params: { id: String(item.id) },
+              })
+            }
           />
         )}
         ListFooterComponent={
@@ -923,212 +794,34 @@ export default function ExploreScreen() {
       />
 
       {/* LUXURY INR PRICE FILTER MODAL */}
-      <Modal
+      <ExplorePriceFilterModal
         visible={showPriceModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowPriceModal(false)}
-      >
-        <Pressable style={styles.modalOverlay} onPress={() => setShowPriceModal(false)}>
-          <Pressable
-            style={[
-              styles.priceSheet,
-              { backgroundColor: colors.card, borderColor: colors.border },
-            ]}
-            onPress={(e) => e.stopPropagation()}
-          >
-            <View style={styles.priceSheetHeader}>
-              <View>
-                <Text style={[styles.priceSheetEyebrow, { color: colors.gold }]}>PRICE RANGE (INR ₹)</Text>
-                <Text style={[styles.priceSheetTitle, { color: colors.text }]}>Filter by Value</Text>
-              </View>
-              <Pressable
-                style={[styles.modalCloseBtn, { borderColor: colors.border }]}
-                onPress={() => setShowPriceModal(false)}
-              >
-                <Ionicons name="close" size={18} color={colors.text} />
-              </Pressable>
-            </View>
-
-            {/* PRESETS LIST */}
-            <Text style={[styles.priceSectionLabel, { color: colors.textSecondary }]}>
-              CURATED PRESETS
-            </Text>
-            <View style={styles.presetsGrid}>
-              {PRICE_PRESETS.map((preset) => {
-                const active = selectedPresetId === preset.id;
-                return (
-                  <Pressable
-                    key={preset.id}
-                    onPress={() => handlePresetSelect(preset)}
-                    style={[
-                      styles.presetChip,
-                      {
-                        backgroundColor: active ? colors.goldSoft : colors.background,
-                        borderColor: active ? colors.gold : colors.border,
-                      },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.presetChipText,
-                        { color: active ? colors.gold : colors.text },
-                        active && { fontFamily: FONTS.sansBold },
-                      ]}
-                    >
-                      {preset.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            {/* CUSTOM INR RANGE */}
-            <Text style={[styles.priceSectionLabel, { color: colors.textSecondary, marginTop: 16 }]}>
-              CUSTOM INR RANGE
-            </Text>
-            <View style={styles.customPriceRow}>
-              <View style={[styles.priceInputBox, { backgroundColor: colors.input, borderColor: colors.border }]}>
-                <Text style={[styles.currencyPrefix, { color: colors.gold }]}>₹</Text>
-                <TextInput
-                  style={[styles.priceInput, { color: colors.text }]}
-                  placeholder="Min Price"
-                  placeholderTextColor={colors.textMuted}
-                  keyboardType="numeric"
-                  value={customMinInput}
-                  onChangeText={(val) => {
-                    setCustomMinInput(val);
-                    setSelectedPresetId("custom");
-                  }}
-                />
-              </View>
-              <Text style={[styles.priceDivider, { color: colors.textSecondary }]}>–</Text>
-              <View style={[styles.priceInputBox, { backgroundColor: colors.input, borderColor: colors.border }]}>
-                <Text style={[styles.currencyPrefix, { color: colors.gold }]}>₹</Text>
-                <TextInput
-                  style={[styles.priceInput, { color: colors.text }]}
-                  placeholder="Max Price"
-                  placeholderTextColor={colors.textMuted}
-                  keyboardType="numeric"
-                  value={customMaxInput}
-                  onChangeText={(val) => {
-                    setCustomMaxInput(val);
-                    setSelectedPresetId("custom");
-                  }}
-                />
-              </View>
-            </View>
-
-            {/* ACTION BUTTONS */}
-            <View style={styles.priceActionRow}>
-              <Pressable
-                style={[styles.resetPriceBtn, { borderColor: colors.border }]}
-                onPress={() => {
-                  setSelectedPresetId("all");
-                  setMinPrice(undefined);
-                  setMaxPrice(undefined);
-                  setCustomMinInput("");
-                  setCustomMaxInput("");
-                  setShowPriceModal(false);
-                }}
-              >
-                <Text style={[styles.resetPriceBtnText, { color: colors.textSecondary }]}>RESET</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.applyPriceBtn, { backgroundColor: colors.gold }]}
-                onPress={applyCustomPrice}
-              >
-                <Text style={styles.applyPriceBtnText}>APPLY PRICE FILTER</Text>
-              </Pressable>
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      <AppBottomNav />
+        selectedPresetId={selectedPresetId}
+        customMinInput={customMinInput}
+        customMaxInput={customMaxInput}
+        onSelectPreset={handlePresetSelect}
+        onChangeMinInput={(val) => {
+          setCustomMinInput(val);
+          setSelectedPresetId("custom");
+        }}
+        onChangeMaxInput={(val) => {
+          setCustomMaxInput(val);
+          setSelectedPresetId("custom");
+        }}
+        onReset={() => {
+          setSelectedPresetId("all");
+          setMinPrice(undefined);
+          setMaxPrice(undefined);
+          setCustomMinInput("");
+          setCustomMaxInput("");
+          setShowPriceModal(false);
+        }}
+        onApply={applyCustomPrice}
+        onClose={() => setShowPriceModal(false)}
+      />
     </SafeAreaView>
   );
 }
-
-const ArtworkGridCard = React.memo(function ArtworkGridCard({
-  product,
-  index,
-  isSaved,
-  onToggleWishlist,
-}: {
-  product: WooCommerceProduct;
-  index: number;
-  isSaved: boolean;
-  onToggleWishlist: () => void;
-}) {
-  const router = useRouter();
-  const { colors, isDark } = useAppTheme();
-  const image = product.images?.[0];
-  const price = product.price || product.regular_price;
-
-  const heightPatterns = [220, 250, 205, 235];
-  const frameHeight = heightPatterns[index % heightPatterns.length];
-
-  return (
-    <Pressable
-      style={({ pressed }) => [styles.gridCard, pressed && styles.cardPressed]}
-      onPress={() =>
-        router.push({
-          pathname: "/painting/[id]",
-          params: { id: String(product.id) },
-        })
-      }
-    >
-      <View
-        style={[
-          styles.imageFrame,
-          {
-            height: frameHeight,
-            backgroundColor: isDark ? "#20222C" : "#ECE5D8",
-          },
-        ]}
-      >
-        {image?.src ? (
-          <ExpoImage
-            source={{ uri: image.src }}
-            style={styles.image}
-            contentFit="cover"
-            cachePolicy="memory-disk"
-            transition={200}
-          />
-        ) : (
-          <Ionicons name="image-outline" size={30} color={colors.gold} />
-        )}
-
-        {/* WISHLIST BUTTON */}
-        <Pressable
-          style={styles.wishlistBtn}
-          onPress={(e) => {
-            e.stopPropagation();
-            onToggleWishlist();
-          }}
-          accessibilityLabel={isSaved ? "Remove from wishlist" : "Add to wishlist"}
-        >
-          <Ionicons
-            name={isSaved ? "heart" : "heart-outline"}
-            size={16}
-            color={isSaved ? "#E74C3C" : "#FFFFFF"}
-          />
-        </Pressable>
-      </View>
-
-      <Text style={[styles.productName, { color: isDark ? colors.gold : colors.text }]} numberOfLines={2}>
-        {product.name}
-      </Text>
-      <Text style={[styles.productMeta, { color: colors.textSecondary }]}>
-        {product.categories?.[0]?.name ?? "Original artwork"}
-      </Text>
-      <Text style={[styles.price, { color: colors.gold }]}>
-        {price ? `₹ ${Number(price).toLocaleString("en-IN")}` : "Price on request"}
-      </Text>
-    </Pressable>
-  );
-});
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#FAF8F3" },
@@ -1258,60 +951,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  sortMenu: {
-    marginHorizontal: 20,
-    marginBottom: 8,
-    padding: 14,
-    borderRadius: 16,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#E8E2D8",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 4,
-  },
-  sortMenuTitle: {
-    color: "#B8964E",
-    fontSize: 10,
-    fontFamily: FONTS.sansExtraBold,
-    letterSpacing: 1.2,
-    marginBottom: 8,
-  },
-  sortOptionRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: "#F4EFE6",
-  },
-  sortOptionRowSelected: {
-    backgroundColor: "transparent",
-  },
-  sortOptionText: {
-    color: "#77736B",
-    fontSize: 13,
-    fontFamily: FONTS.sansRegular,
-  },
-  categoryFiltersContainer: {
-    paddingVertical: 4,
-  },
-  filters: { paddingHorizontal: 20, paddingVertical: 4, gap: 8 },
-  filter: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#E8E2D8",
-    backgroundColor: "#FFFFFF",
-  },
-  filterText: {
-    color: "#77736B",
-    fontSize: 11,
-    fontFamily: FONTS.sansBold,
-  },
   resultsInfoRow: {
     paddingHorizontal: 20,
     flexDirection: "row",
@@ -1371,54 +1010,6 @@ const styles = StyleSheet.create({
   columnWrapper: {
     justifyContent: "space-between",
     gap: 12,
-  },
-  gridCard: {
-    flex: 1,
-    maxWidth: "48.5%",
-    marginBottom: 16,
-  },
-  cardPressed: {
-    transform: [{ scale: 0.97 }],
-    opacity: 0.9,
-  },
-  imageFrame: {
-    overflow: "hidden",
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 16,
-    backgroundColor: "#ECE5D8",
-    position: "relative",
-  },
-  image: { width: "100%", height: "100%" },
-  wishlistBtn: {
-    position: "absolute",
-    top: 8,
-    right: 8,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "rgba(20, 20, 20, 0.45)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  productName: {
-    marginTop: 8,
-    color: "#252525",
-    fontSize: 13,
-    fontFamily: FONTS.sansBold,
-    lineHeight: 18,
-  },
-  productMeta: {
-    marginTop: 2,
-    color: "#77736B",
-    fontSize: 10,
-    fontFamily: FONTS.sansMedium,
-  },
-  price: {
-    marginTop: 4,
-    color: "#B8964E",
-    fontSize: 13,
-    fontFamily: FONTS.sansExtraBold,
   },
   skeletonGrid: {
     flexDirection: "row",
@@ -1491,128 +1082,4 @@ const styles = StyleSheet.create({
     backgroundColor: "#B8964E",
   },
   retryText: { color: "#FFFFFF", fontSize: 10, fontFamily: FONTS.sansExtraBold, letterSpacing: 1 },
-
-  // Price Modal Styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.55)",
-    justifyContent: "flex-end",
-  },
-  priceSheet: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 22,
-    borderWidth: 1,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 10,
-  },
-  priceSheetHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 16,
-  },
-  priceSheetEyebrow: {
-    fontSize: 10,
-    fontFamily: FONTS.sansExtraBold,
-    letterSpacing: 1.5,
-  },
-  priceSheetTitle: {
-    fontSize: 20,
-    fontFamily: FONTS.serifBold,
-    marginTop: 2,
-  },
-  modalCloseBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-  },
-  priceSectionLabel: {
-    fontSize: 10,
-    fontFamily: FONTS.sansBold,
-    letterSpacing: 1,
-    marginBottom: 8,
-  },
-  presetsGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  presetChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-  },
-  presetChipText: {
-    fontSize: 12,
-    fontFamily: FONTS.sansMedium,
-  },
-  customPriceRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  priceInputBox: {
-    flex: 1,
-    height: 44,
-    borderRadius: 12,
-    borderWidth: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-  },
-  currencyPrefix: {
-    fontSize: 14,
-    fontFamily: FONTS.sansBold,
-    marginRight: 6,
-  },
-  priceInput: {
-    flex: 1,
-    height: "100%",
-    fontSize: 13,
-    fontFamily: FONTS.sansRegular,
-  },
-  priceDivider: {
-    fontSize: 16,
-    fontFamily: FONTS.sansBold,
-  },
-  priceActionRow: {
-    flexDirection: "row",
-    gap: 10,
-    marginTop: 22,
-    marginBottom: Platform.OS === "ios" ? 16 : 6,
-  },
-  resetPriceBtn: {
-    flex: 1,
-    height: 48,
-    borderRadius: 14,
-    borderWidth: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  resetPriceBtnText: {
-    fontSize: 11,
-    fontFamily: FONTS.sansExtraBold,
-    letterSpacing: 1,
-  },
-  applyPriceBtn: {
-    flex: 2,
-    height: 48,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  applyPriceBtnText: {
-    color: "#FFFFFF",
-    fontSize: 11,
-    fontFamily: FONTS.sansExtraBold,
-    letterSpacing: 1,
-  },
 });
