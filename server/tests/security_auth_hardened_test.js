@@ -88,9 +88,9 @@ async function runSecurityAuthTests() {
     // -------------------------------------------------------------
     // INVARIANT 2: Rate Limiter unavailable returns 503 (Fail-Closed)
     // -------------------------------------------------------------
-    console.log("\n[INVARIANT 2] Rate Limiter Outage -> 503 Fail-Closed");
+    console.log("\n[INVARIANT 2] Rate Limiter Outage -> Fail-Open To In-Memory Limiter");
 
-    await test("2.1 session-token returns 503 if rate limiter experiences outage", async () => {
+    await test("2.1 session-token fails open to in-memory limiter (not 503) during Redis outage", async () => {
       distributedRateLimiter.setMockMode("error");
 
       const res = await fetch(`${baseUrl}/api/auth/session-token`, {
@@ -101,12 +101,11 @@ async function runSecurityAuthTests() {
 
       distributedRateLimiter.setMockMode("normal");
 
-      assert.strictEqual(res.status, 503);
-      const data = await res.json();
-      assert.strictEqual(data.code, "SERVICE_UNAVAILABLE");
+      assert.notStrictEqual(res.status, 503, "session-token must not return 503 during Redis outage");
+      assert.strictEqual(res.status, 401, "session-token must proceed to validate token");
     });
 
-    await test("2.2 refresh-token returns 503 if rate limiter experiences outage", async () => {
+    await test("2.2 refresh-token fails open to in-memory limiter (not 503) during Redis outage", async () => {
       distributedRateLimiter.setMockMode("error");
 
       const res = await fetch(`${baseUrl}/api/auth/refresh-token`, {
@@ -117,9 +116,8 @@ async function runSecurityAuthTests() {
 
       distributedRateLimiter.setMockMode("normal");
 
-      assert.strictEqual(res.status, 503);
-      const data = await res.json();
-      assert.strictEqual(data.code, "SERVICE_UNAVAILABLE");
+      assert.notStrictEqual(res.status, 503, "refresh-token must not return 503 during Redis outage");
+      assert.strictEqual(res.status, 401, "refresh-token must proceed to validate token");
     });
 
     // -------------------------------------------------------------

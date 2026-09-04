@@ -468,7 +468,7 @@ router.post(["/api/auth/google-verify", "/api/api/auth/google-verify", "/auth/go
 });/**
  * POST /api/auth/session-token
  * Exchanges a Firebase Custom Token for authoritative Firebase ID & Refresh Tokens.
- * Rate-limited per IP (Max 10 req/5min, fail-closed) with strict payload validation.
+ * Rate-limited per IP (Max 10 req/5min, fail-open to bounded local memory) with strict payload validation.
  */
 router.post("/api/auth/session-token", async (req, res) => {
   const clientIp = req.ip || req.connection?.remoteAddress || "unknown_ip";
@@ -478,7 +478,7 @@ router.post("/api/auth/session-token", async (req, res) => {
     key: clientIp,
     limit: 10,
     windowSeconds: 300,
-    failMode: "fail-closed",
+    failMode: "fail-open",
   });
 
   if (!rateLimit.allowed) {
@@ -526,7 +526,7 @@ router.post("/api/auth/session-token", async (req, res) => {
 /**
  * POST /api/auth/refresh-token
  * Refreshes an expired Firebase ID Token using the Refresh Token.
- * Rate-limited per IP (Max 30 req/5min, fail-closed) with strict payload validation.
+ * Rate-limited per IP (Max 30 req/5min, fail-open to bounded local memory) with strict payload validation.
  */
 router.post("/api/auth/refresh-token", async (req, res) => {
   const clientIp = req.ip || req.connection?.remoteAddress || "unknown_ip";
@@ -536,7 +536,7 @@ router.post("/api/auth/refresh-token", async (req, res) => {
     key: clientIp,
     limit: 30,
     windowSeconds: 300,
-    failMode: "fail-closed",
+    failMode: "fail-open",
   });
 
   if (!rateLimit.allowed) {

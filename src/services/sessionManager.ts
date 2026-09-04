@@ -62,13 +62,10 @@ export async function exchangeCustomTokenForSession(customToken: string): Promis
     const data = await res.json().catch(() => ({}));
 
     if (!res.ok || !data.success || !data.idToken) {
-      // If server does not support session-token exchange endpoint yet, store customToken safely in SecureStore
-      await saveSessionCredentials({
-        idToken: customToken.trim(),
-        refreshToken: null,
-        expiresInSeconds: 3600,
-      });
-      return { success: true, idToken: customToken.trim() };
+      return {
+        success: false,
+        error: data.error || `Session token exchange failed (HTTP ${res.status}).`,
+      };
     }
 
     await saveSessionCredentials({
@@ -82,14 +79,11 @@ export async function exchangeCustomTokenForSession(customToken: string): Promis
       idToken: data.idToken,
       refreshToken: data.refreshToken,
     };
-  } catch {
-    // Network / offline fallback - save credentials to SecureStore for offline resilience
-    await saveSessionCredentials({
-      idToken: customToken.trim(),
-      refreshToken: null,
-      expiresInSeconds: 3600,
-    });
-    return { success: true, idToken: customToken.trim() };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || "Network error during session token exchange.",
+    };
   }
 }
 
@@ -185,13 +179,22 @@ export async function authenticatedFetch(
 
   // Handle 401 Unauthorized with single retry after refreshing session token
   if (response.status === 401 && !isRetry) {
-    const newToken = await refreshSessionToken();
-    if (newToken) {
-      headers.set("Authorization", `Bearer ${newToken}`);
-      return await fetch(url, { ...options, headers });
-    } else {
-      // Irrevocable session expiration
-      void dispatchSessionExpired();
+    const existingRefreshToken = await getRefreshToken();
+
+    // Trigger session expired ONLY when:
+    // 1. A previously valid authenticated session actually existed, AND
+    // 2. An ID token was being used (token is non-null), AND
+    // 3. A valid refresh token was previously available, AND
+    // 4. The refresh attempt fails
+    if (token && existingRefreshToken && existingRefreshToken.trim().length > 0) {
+      const newToken = await refreshSessionToken();
+      if (newToken) {
+        headers.set("Authorization", `Bearer ${newToken}`);
+        return await fetch(url, { ...options, headers });
+      } else {
+        // Genuine irrevocable session expiration for a previously authenticated user
+        void dispatchSessionExpired();
+      }
     }
   }
 
